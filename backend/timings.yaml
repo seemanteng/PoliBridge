@@ -1,0 +1,28 @@
+# Escalation and deadline policy (Build Plan, "Timings"). Hours unless stated.
+# Changing this file changes system behaviour; rules read it, nothing hard-codes it.
+High:
+  ack_hours: 24
+  ack_escalations:            # escalate if not acknowledged
+    - {after_hours: 24, to: manager}
+    - {after_hours: 48, to: ciso}
+  interim_hours: 48           # compensating control or documented risk acceptance if unpatched
+  remediate_hours: 168        # 7 days
+Medium:
+  ack_hours: 48
+  ack_escalations:
+    - {after_hours: 48, to: manager}
+  interim_hours: null
+  remediate_hours: 720        # 30 days
+Low:
+  ack_working_days: 5
+  ack_escalations:
+    - {after_working_days: 5, to: manager}
+  interim_hours: null
+  remediate_hours: 2160       # 90 days
+
+# Policy values used by other rules
+attestation_days: 182               # six-monthly ownership attestation
+component_data_stale_days: 30       # inventory older than this is "stale" (A3)
+scan_evidence_validity_days: 14     # critical internet-facing scan evidence (F1)
+risk_acceptance_max_days: 90
+impact_modifier_threshold: 4        # approved modifier combination that makes High

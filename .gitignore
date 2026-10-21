@@ -1,0 +1,8 @@
+backend/.venv/
+backend/.env
+backend/polibridge.db
+backend/clock_state.json
+backend/**/__pycache__/
+backend/.pytest_cache/
+frontend/node_modules/
+frontend/dist/
