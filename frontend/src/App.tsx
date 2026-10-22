@@ -26,7 +26,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="shell">
       <nav className="nav">
-        <div className="brand"><span>⌒</span> PoliBridge</div>
+        <div className="brand"><img src="/logo.svg" alt="" />PoliBridge</div>
         {NAV.map(([to, label, icon]) => (
           <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `item${isActive ? ' active' : ''}`}>
             <span>{icon}</span>{label}
