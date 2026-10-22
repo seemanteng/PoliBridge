@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, Loading, Modal, useAction } from '../ui'
 import { OrgChart, OwnershipMap } from './RegistryCharts'
@@ -26,12 +26,12 @@ const ROLE_OPTIONS = Object.keys(ROLE)
 
 function PersonModal({ person, people, units, onClose }: { person?: any; people: any[]; units: any[]; onClose: () => void }) {
   const { run, error, busy } = useAction()
-  const [f, setF] = useState({ name: person?.name || '', directory_id: '', title: person?.title || '', role: person?.role || 'owner',
+  const [f, setF] = useState({ name: person?.name || '', email: person?.email || '', directory_id: '', title: person?.title || '', role: person?.role || 'owner',
     manager_id: person?.manager_id ? String(person.manager_id) : '', business_unit_id: person ? String(units.find((u) => u.name === person.business_unit)?.id || '') : '',
     deliverable: person ? person.deliverable : true })
   const set = (k: string, v: any) => setF({ ...f, [k]: v })
   const go = async () => {
-    const body: any = { name: f.name, title: f.title || null, role: f.role, business_unit_id: f.business_unit_id ? Number(f.business_unit_id) : null,
+    const body: any = { name: f.name, email: f.email, title: f.title || null, role: f.role, business_unit_id: f.business_unit_id ? Number(f.business_unit_id) : null,
       manager_id: f.manager_id ? Number(f.manager_id) : null, deliverable: f.deliverable }
     const ok = await run(async () => {
       if (person) await api.patch(`/registry/people/${person.id}`, { ...body, clear_manager: !f.manager_id })
@@ -43,6 +43,8 @@ function PersonModal({ person, people, units, onClose }: { person?: any; people:
   return (
     <Modal title={person ? `Edit ${person.name}` : 'Add person'} sub={person ? 'Changing department or manager counts as a mover event: systems they own need ownership re-attested.' : 'A new joiner. Owners are identified by directory id, never by email address.'} onClose={onClose}>
       <label>Name</label><input value={f.name} onChange={(e) => set('name', e.target.value)} />
+      <label>Email</label><input type="email" value={f.email} onChange={(e) => set('email', e.target.value)} placeholder="jane.doe@company.com" />
+      <p className="faint">How they are contacted. Ownership and sign-offs follow their directory id, never their email.</p>
       {!person && <><label>Directory id (optional, generated from the name)</label><input value={f.directory_id} onChange={(e) => set('directory_id', e.target.value)} placeholder="e.g. jdoe" /></>}
       <label>Job title</label><input value={f.title} onChange={(e) => set('title', e.target.value)} />
       <label>Role in PoliBridge</label>
@@ -56,7 +58,7 @@ function PersonModal({ person, people, units, onClose }: { person?: any; people:
       {person && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}><input type="checkbox" style={{ width: 'auto' }} checked={f.deliverable} onChange={(e) => set('deliverable', e.target.checked)} />Mail is deliverable</label>}
       {error && <p className="err">{error}</p>}
       <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={busy || !f.name.trim() || !f.business_unit_id} onClick={go}>{person ? 'Save' : 'Add person'}</button></div>
+        <button className="btn primary" disabled={busy || !f.name.trim() || !f.email.trim() || !f.business_unit_id} onClick={go}>{person ? 'Save' : 'Add person'}</button></div>
     </Modal>
   )
 }
@@ -207,7 +209,10 @@ function System({ a, people, onEdit }: { a: any; people: any[]; onEdit: () => vo
 
 export default function Registry() {
   const { data: r, error } = useApi('/registry')
-  const [tab, setTab] = useState<(typeof TABS)[number]>(() => TABS.find((t) => t === new URLSearchParams(location.search).get('tab')) || 'People')
+  // the tab lives in the URL, so a refresh or a shared link comes back to the same place
+  const [params, setParams] = useSearchParams()
+  const tab = TABS.find((t) => t === params.get('tab')) || 'People'
+  const setTab = (t: (typeof TABS)[number]) => setParams(t === 'People' ? {} : { tab: t })
   // search text and filters are kept per tab, so switching tabs does not lose them
   const [f, setF] = useState<Record<string, string>>({})
   const [editing, setEditing] = useState<any>(null)  // person being edited, or {} when adding
@@ -221,7 +226,7 @@ export default function Registry() {
   const q = g('q')
   const units = uniq(r.business_units.map((b: any) => b.name))
 
-  const people = r.people.filter((p: any) => has(q, p.name, p.directory_id, p.title, ROLE[p.role], p.manager, p.business_unit, p.owns.join(' '))
+  const people = r.people.filter((p: any) => has(q, p.name, p.email, p.directory_id, p.title, ROLE[p.role], p.manager, p.business_unit, p.owns.join(' '))
     && (!g('bu') || p.business_unit === g('bu')) && (!g('role') || p.role === g('role'))
     && (!g('status') || (g('status') === 'active' ? p.active && p.deliverable : g('status') === 'left' ? !p.active : p.active && !p.deliverable)))
 
@@ -289,14 +294,15 @@ export default function Registry() {
           { label: 'Role', value: g('role'), set: set('role'), options: uniq(r.people.map((p: any) => p.role)).map((x) => [x, ROLE[x] || x] as [string, string]) },
           { label: 'Status', value: g('status'), set: set('status'), options: [['active', 'Active'], ['left', 'Left'], ['undeliverable', 'Mail undeliverable']] }]} />
         <div className="card" style={{ marginTop: 14 }}>
-          <table><thead><tr><th>Name</th><th>Role</th><th>Reports to</th><th>Department</th><th>Owns / responsible for</th><th>Status</th><th></th></tr></thead><tbody>
+          <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Reports to</th><th>Department</th><th>Owns / responsible for</th><th>Status</th><th></th></tr></thead><tbody>
             {people.map((p: any) => <tr key={p.id}><td><b>{p.name}</b><div className="faint mono">{p.directory_id}</div></td>
+              <td className="mono" style={{ fontSize: 12 }}>{p.email || <span className="red">missing</span>}</td>
               <td>{p.title || ROLE[p.role]}</td><td>{p.manager || 'Board of Directors'}</td><td>{p.business_unit}</td>
               <td>{p.owns.length ? <>owns {p.owns.join(', ')}</> : DUTY[p.role] || ROLE[p.role]}</td>
-              <td>{p.active ? (p.deliverable ? <Badge kind="info">active</Badge> : <Badge kind="over">mail undeliverable</Badge>) : <Badge kind="over">left</Badge>}</td>
+              <td>{p.active ? (p.deliverable ? <Badge kind="ok">active</Badge> : <Badge kind="over">mail undeliverable</Badge>) : <Badge kind="over">left</Badge>}</td>
               <td style={{ whiteSpace: 'nowrap' }}>{p.active && <><button className="btn sm" onClick={() => setEditing(p)}>Edit</button>{' '}
                 <button className="btn sm danger" onClick={() => setRemoving(p)}>Remove</button></>}</td></tr>)}
-            {!people.length && <tr><td colSpan={7} className="muted">No people match.</td></tr>}</tbody></table></div></>}
+            {!people.length && <tr><td colSpan={8} className="muted">No people match.</td></tr>}</tbody></table></div></>}
 
       {tab === 'Findings' && <>
         <Controls {...common} shown={findings.length} total={r.findings.length} selects={[

@@ -20,6 +20,8 @@ def _passages(db, ob: Obligation) -> list[dict]:
         out.append({"id": f"{ob.source_ref}", "text": ob.quotation})
     if ob.advisory_id:
         a = db.get(Advisory, ob.advisory_id)
+        if a.description:
+            out.append({"id": f"{a.cve} (NVD)", "text": a.description})
         out.append({"id": a.cve, "text": f"{a.cve}: {a.product} versions {', '.join(a.affected_versions)} are "
                                          f"affected. Fixed version: {a.fixed_version or 'n/a'}."})
     for s in db.scalars(select(Source).where(Source.kind == "policy")):

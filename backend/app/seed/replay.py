@@ -6,6 +6,7 @@ edits for decisions), leaving the clock at 15 Mar 2017 14:20."""
 from datetime import datetime, timedelta
 
 from ..clock import clock
+from ..identity import email_for
 from ..models import (Person, BusinessUnit, Asset, Component, DiscoveredAsset, Source, SourceVersion, AuditEvent,
                       Dependency, BoardItem, Claim, Task, Evidence, Finding)
 from ..services import registry, intake, assignment, closure, assurance
@@ -51,8 +52,8 @@ FTC_SAFEGUARDS_2016 = """\
 
 
 def _person(db, did, name, role, title=None, manager=None, bu=None, active=True):
-    p = Person(directory_id=did, name=name, role=role, title=title, manager_id=manager.id if manager else None,
-               business_unit_id=bu.id if bu else None, active=active)
+    p = Person(directory_id=did, name=name, email=email_for(name), role=role, title=title,
+               manager_id=manager.id if manager else None, business_unit_id=bu.id if bu else None, active=active)
     db.add(p)
     db.flush()
     return p
@@ -67,6 +68,7 @@ def load_baseline(db, anchor: datetime | None = None):
     The default reproduces 2017 exactly (the replay and the tests); pass the current time for a live demo."""
     A = anchor or BASE
     T = lambda d: A + (d - BASE)  # noqa: E731
+    live = anchor is not None  # the live demo is deliberately smaller than the 2017 replay
     clock.set(T(D(2017, 2, 28, 8, 0)))
     bu = BusinessUnit(name="Consumer Services")
     units = {n: BusinessUnit(name=n) for n in ("Executive Office", "Information Security", "Risk & Compliance",
@@ -91,8 +93,10 @@ def load_baseline(db, anchor: datetime | None = None):
     whit = _person(db, "dwhitfield", "Dana Whitfield", "bu_head", "Head, Consumer Services", manager=varga, bu=bu)
     bu.head_id = whit.id
     okafor = _person(db, "rokafor", "Remi Okafor", "owner", "Former ACIS owner", manager=varga, bu=bu, active=False)
-    adeyemi = _person(db, "madeyemi", "Mo Adeyemi", "owner", "Credit File API owner", manager=varga, bu=bu)
-    kowalski = _person(db, "hkowalski", "Hana Kowalski", "owner", "Member portal owner", manager=varga, bu=bu)
+    adeyemi = kowalski = None
+    if not live:  # their systems are only in the replay
+        adeyemi = _person(db, "madeyemi", "Mo Adeyemi", "owner", "Credit File API owner", manager=varga, bu=bu)
+        kowalski = _person(db, "hkowalski", "Hana Kowalski", "owner", "Member portal owner", manager=varga, bu=bu)
     ramirez = _person(db, "sramirez", "Sofia Ramírez", "owner", "Reporting platform owner", manager=varga, bu=bu)
     _person(db, "jpark", "Jin Park", "owner", "Security analyst", manager=varga, bu=bu)
     osei = _person(db, "kosei", "Kofi Osei", "owner", "Network security engineer", manager=varga, bu=bu)
@@ -110,12 +114,14 @@ def load_baseline(db, anchor: datetime | None = None):
     acis = asset("ACIS · consumer dispute portal", okafor, internet_facing=True, critical=True, customer_facing=True,
                  data_sensitivity="confidential", app_roots=["/opt/acis"],
                  legacy_contact="acis-ops (distribution list)")
-    cf = asset("Credit File API", adeyemi, T(D(2017, 3, 2)), "sbom", ["/opt/cfapi/**"],
-               [("struts2-core", "2.3.30", "/opt/cfapi/webapps/struts")], internet_facing=True, critical=True,
-               data_sensitivity="confidential", app_roots=["/opt/cfapi"])
-    mp = asset("Member portal", kowalski, T(D(2017, 3, 6)), "sca", ["/opt/member/**"],
-               [("struts2-core", "2.5.8", "/opt/member/webapps/struts")], internet_facing=True, critical=True,
-               customer_facing=True, data_sensitivity="confidential", app_roots=["/opt/member"])
+    cf = mp = None
+    if not live:
+        cf = asset("Credit File API", adeyemi, T(D(2017, 3, 2)), "sbom", ["/opt/cfapi/**"],
+                   [("struts2-core", "2.3.30", "/opt/cfapi/webapps/struts")], internet_facing=True, critical=True,
+                   data_sensitivity="confidential", app_roots=["/opt/cfapi"])
+        mp = asset("Member portal", kowalski, T(D(2017, 3, 6)), "sca", ["/opt/member/**"],
+                   [("struts2-core", "2.5.8", "/opt/member/webapps/struts")], internet_facing=True, critical=True,
+                   customer_facing=True, data_sensitivity="confidential", app_roots=["/opt/member"])
     batch = asset("Batch reporting server", ramirez, T(D(2016, 1, 15)), "sbom", ["/srv/batch/**"],
                   [("jasperreports", "6.1.0", "/srv/batch/jasper")], app_roots=["/srv/batch"])
     hr = asset("HR payroll · vendor SaaS", ramirez, T(D(2017, 3, 1)), "vendor_sbom", ["/vendor/hr/**"],
@@ -124,9 +130,10 @@ def load_baseline(db, anchor: datetime | None = None):
     wiki = asset("Internal wiki", ramirez, T(D(2017, 3, 7)), "authenticated_scan", ["/srv/wiki/**"],
                  [("confluence", "5.9", "/srv/wiki/app")], app_roots=["/srv/wiki"])
     db.add_all([DiscoveredAsset(name=a.name, source="network", internet_facing=a.internet_facing)
-                for a in (acis, cf, mp, batch, hr, wiki)])
+                for a in (acis, cf, mp, batch, hr, wiki) if a])
     for a in (cf, mp, batch, hr, wiki):
-        registry.attest_ownership(db, a, db.get(Person, a.owner_id))
+        if a:
+            registry.attest_ownership(db, a, db.get(Person, a.owner_id))
 
     # Ownership of ACIS lapsed when its owner left (2 Feb)
     old = create_claim(db, actor="directory", claim_type="ownership", asset_id=acis.id, value="attested",

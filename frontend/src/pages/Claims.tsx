@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, fmt, getUser, refreshAll, useApi } from '../api'
+import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, Loading, Modal, useAction } from '../ui'
 
 const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance' }
@@ -57,7 +57,7 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
         <div><label>Evidence date</label><input type="datetime-local" value={f.evidence} onChange={(e) => set('evidence', e.target.value)} /></div>
         <div><label>Lapses on</label><input type="datetime-local" value={f.expiry} onChange={(e) => set('expiry', e.target.value)} /></div></div>
       <label>Told when it lapses</label>
-      <select value={f.owner} onChange={(e) => set('owner', e.target.value)}><option value="">Me ({getUser()})</option>
+      <select value={f.owner} onChange={(e) => set('owner', e.target.value)}><option value="">Risk &amp; Compliance team</option>
         {(people.data || []).filter((p: any) => p.active).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
       {error && <p className="err">{error}</p>}
       <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
@@ -101,7 +101,7 @@ export function ClaimDetail() {
     <>
       <div className="crumbs"><Link to="/claims">Claims</Link> / {c.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><Badge>{TYPE[c.type]}</Badge>
-        {lapsed ? <Badge kind="cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{c.status}</Badge>}</div>
+        {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{c.status}</Badge>}</div>
       <h1>“{c.statement}”</h1>
       <p className="muted">{c.type === 'monitoring' ? 'This claim was only as good as the certificate on the inspection device. When the certificate expired, so did the claim.' : c.reason || 'Evidence life and dependants are shown below.'}</p>
 

@@ -52,7 +52,6 @@ function Escalations() {
           {!a.items.length && <tr><td colSpan={5} className="muted">Nothing is waiting. Items appear here when an owner has not signed off or updated work by its deadline, for example after you ingest an advisory on the Acknowledgements page.</td></tr>}
         </tbody></table>
         {aerr && <p className="err">{aerr}</p>}
-        <p className="faint" style={{ marginTop: 8 }}>Reminding and escalating is limited to managers, department heads, the CISO, the risk owner, compliance and executives.</p>
       </div>
 
       <div className="grid g2">

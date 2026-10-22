@@ -17,6 +17,7 @@ class Person(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     directory_id: Mapped[str] = mapped_column(String, unique=True)  # identity, never email
     name: Mapped[str] = mapped_column(String)
+    email: Mapped[str | None] = mapped_column(String, nullable=True)  # contact only; identity is directory_id
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # job title shown in the UI
     # owner | manager | bu_head | ciso | risk_owner | senior_mgmt | compliance | legal
     # | cco | reviewer | internal_audit

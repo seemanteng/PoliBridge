@@ -28,6 +28,9 @@ def ingest_advisory(db, *, cve: str, product: str, affected_versions: list[str],
     db.flush()
     audit.log(db, "system", "obligation", ob.id, "created_from_advisory", cve=cve, source=src.name)
     assess_obligation(db, ob)
+    if not ob.is_test:  # the required fix is on screen straight away, not drafted on request
+        from . import rag
+        rag.generate_guidance(db, ob, "system owner")
     return ob
 
 

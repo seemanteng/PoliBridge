@@ -15,6 +15,8 @@ def assess_asset(*, components: list[dict], inventory_verified_at: datetime | No
     # A3: no data, unverified or stale -> Cannot Determine, never Does Not Apply
     if inventory_verified_at is None:
         return CD, "A3: no verified component inventory for this asset"
+    if inventory_verified_at > now:
+        return CD, f"A3: component inventory is dated in the future ({inventory_verified_at:%Y-%m-%d}); treated as unverified"
     if now - inventory_verified_at > timedelta(days=stale_days):
         return CD, f"A3: component inventory is stale (verified {inventory_verified_at:%Y-%m-%d})"
     matches = [c for c in components if versions.norm(c["name"]) == versions.norm(product)]

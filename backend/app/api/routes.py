@@ -10,16 +10,16 @@ from ..clock import clock
 from ..rules.versions import norm
 from ..db import get_db
 from .. import models as M
-from ..services import (registry, intake, nvd, rag, assessment, assignment, closure, assurance, common, views)
+from ..services import (audit, registry, intake, nvd, rag, assessment, assignment, closure, assurance, common, views)
 
 router = APIRouter(prefix="/api")
 
-EDITORS = {"ciso", "bu_head", "manager", "risk_owner", "senior_mgmt", "executive", "compliance", "cco"}
 
 
-def require_editor(me):
-    if me.role not in EDITORS:
-        raise HTTPException(403, "only a manager, business-unit head, CISO, risk owner, compliance or executive can edit the registry")
+def operator(db):
+    """PoliBridge is run by the Risk & Compliance team, who can see and edit everything."""
+    p = db.scalar(select(M.Person).where(M.Person.role == "compliance", M.Person.active == True))  # noqa: E712
+    return p or db.scalar(select(M.Person).where(M.Person.active == True))  # noqa: E712
 
 
 def ser(o):
@@ -37,12 +37,37 @@ def sers(items):
 
 
 def actor(db=Depends(get_db), x_user: str | None = Header(default=None)):
-    if not x_user:
-        raise HTTPException(401, "X-User header (directory id) required")
-    p = common.person_by_directory_id(db, x_user)
-    if not p:
-        raise HTTPException(401, f"unknown user {x_user}")
+    """Whoever is named in X-User, else the Risk & Compliance operator. No action is refused because of the caller's role."""
+    p = common.person_by_directory_id(db, x_user) if x_user else None
+    if p is None:
+        p = operator(db)
+    if p is None:
+        raise HTTPException(503, "the directory is empty; reset the demo data")
     return p
+
+
+def on_behalf(db, me, person, entity: str, entity_id: int, what: str):
+    """The operator acts for the named person (an owner, an approver). The audit trail says who really entered it."""
+    if person is not None and me.id != person.id:
+        audit.log(db, me.directory_id, entity, entity_id, "entered_on_behalf", for_person=person.directory_id,
+                  for_name=person.name, did=what)
+    return person
+
+
+def task_owner(db, t):
+    o = db.get(M.Person, t.owner_id) if t.owner_id else None
+    if o is None:
+        raise HTTPException(400, "this item has no owner; reassign it first")
+    return o
+
+
+def approver_for(db, roles, *, avoid=()):
+    """The first active person holding one of the roles, who is not one of `avoid`."""
+    for role in roles:
+        for p in db.scalars(select(M.Person).where(M.Person.role == role, M.Person.active == True)):  # noqa: E712
+            if p.id not in avoid:
+                return p
+    raise HTTPException(400, f"nobody is registered as {' or '.join(roles)}")
 
 
 def one(db, model, id_):
@@ -158,7 +183,11 @@ def upload_sbom(asset_id: int, body: Sbom, db=Depends(get_db), me=Depends(actor)
 
 @router.post("/assets/{asset_id}/attest")
 def attest(asset_id: int, db=Depends(get_db), me=Depends(actor)):
-    return guarded(lambda: ser(registry.attest_ownership(db, one(db, M.Asset, asset_id), me)))(db)
+    a = one(db, M.Asset, asset_id)
+    if a.owner_id is None:
+        raise HTTPException(400, "this system has no owner to attest")
+    owner = on_behalf(db, me, db.get(M.Person, a.owner_id), "asset", asset_id, "attest_ownership")
+    return guarded(lambda: ser(registry.attest_ownership(db, a, owner)))(db)
 
 
 class Jml(BaseModel):
@@ -167,7 +196,6 @@ class Jml(BaseModel):
 
 @router.post("/people/{person_id}/jml")
 def jml(person_id: int, body: Jml, db=Depends(get_db), me=Depends(actor)):
-    require_editor(me)
     if body.event not in ("leaver", "mover", "joiner"):
         raise HTTPException(400, "event must be leaver, mover or joiner")
     p = one(db, M.Person, person_id)
@@ -377,6 +405,7 @@ def _obligation_detail(db, oid: int):
         depts: dict[str, dict] = {}
         for r in d["estate"]["rows"]:
             a = db.get(M.Asset, r["asset_id"])
+            r["impact"] = db.get(M.Task, r["task_id"]).impact if r.get("task_id") else None
             r["owner"] = a.owner.name if a.owner else None
             r["owner_active"] = bool(a.owner and a.owner.active)
             bu = a.business_unit
@@ -483,7 +512,9 @@ def task_detail(tid: int, db=Depends(get_db)):
 
 @router.post("/tasks/{tid}/acknowledge")
 def ack(tid: int, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: assignment.acknowledge(db, one(db, M.Task, tid), me))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "acknowledge")
+    guarded(lambda: assignment.acknowledge(db, t, owner))(db)
     return task_view(db, db.get(M.Task, tid))
 
 
@@ -493,7 +524,9 @@ class Reason(BaseModel):
 
 @router.post("/tasks/{tid}/reject")
 def reject(tid: int, body: Reason, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: assignment.reject_task(db, one(db, M.Task, tid), me, body.reason))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "reject")
+    guarded(lambda: assignment.reject_task(db, t, owner, body.reason))(db)
     return task_view(db, db.get(M.Task, tid))
 
 
@@ -503,7 +536,9 @@ class Transfer(BaseModel):
 
 @router.post("/tasks/{tid}/transfer")
 def transfer(tid: int, body: Transfer, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: assignment.transfer_task(db, one(db, M.Task, tid), one(db, M.Person, body.new_owner_id), me))(db)
+    t = one(db, M.Task, tid)
+    approver = on_behalf(db, me, approver_for(db, ("bu_head", "manager", "ciso", "risk_owner")), "task", tid, "transfer")
+    guarded(lambda: assignment.transfer_task(db, t, one(db, M.Person, body.new_owner_id), approver))(db)
     return task_view(db, db.get(M.Task, tid))
 
 
@@ -513,13 +548,17 @@ class Interim(BaseModel):
 
 @router.post("/tasks/{tid}/interim-control")
 def interim(tid: int, body: Interim, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: assignment.record_interim_control(db, one(db, M.Task, tid), me, body.description))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "interim_control")
+    guarded(lambda: assignment.record_interim_control(db, t, owner, body.description))(db)
     return task_view(db, db.get(M.Task, tid))
 
 
 @router.post("/tasks/{tid}/fixed")
 def fixed(tid: int, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: closure.mark_fixed(db, one(db, M.Task, tid), me))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "mark_fixed")
+    guarded(lambda: closure.mark_fixed(db, t, owner))(db)
     return task_view(db, db.get(M.Task, tid))
 
 
@@ -535,7 +574,9 @@ class EvidenceIn(BaseModel):
 
 @router.post("/tasks/{tid}/evidence")
 def evidence(tid: int, body: EvidenceIn, db=Depends(get_db), me=Depends(actor)):
-    ev = guarded(lambda: closure.submit_evidence(db, one(db, M.Task, tid), me, **body.model_dump()))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "submit_evidence")
+    ev = guarded(lambda: closure.submit_evidence(db, t, owner, **body.model_dump()))(db)
     return ser(ev)
 
 
@@ -575,7 +616,9 @@ class RiskIn(BaseModel):
 
 @router.post("/tasks/{tid}/risk-acceptance")
 def risk_request(tid: int, body: RiskIn, db=Depends(get_db), me=Depends(actor)):
-    ra = guarded(lambda: assignment.request_risk_acceptance(db, one(db, M.Task, tid), me, **body.model_dump()))(db)
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "request_risk_acceptance")
+    ra = guarded(lambda: assignment.request_risk_acceptance(db, t, owner, **body.model_dump()))(db)
     return ser(ra)
 
 
@@ -586,7 +629,11 @@ def risk_list(db=Depends(get_db)):
 
 @router.post("/risk-acceptances/{rid}/approve")
 def risk_approve(rid: int, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: assignment.approve_risk_acceptance(db, one(db, M.RiskAcceptance, rid), me))(db)
+    ra = one(db, M.RiskAcceptance, rid)
+    t = db.get(M.Task, ra.task_id)
+    approver = on_behalf(db, me, approver_for(db, ("risk_owner", "senior_mgmt", "ciso"),
+                                              avoid=(ra.requested_by_id, t.owner_id)), "risk_acceptance", rid, "approve")
+    guarded(lambda: assignment.approve_risk_acceptance(db, ra, approver))(db)
     return ser(db.get(M.RiskAcceptance, rid))
 
 

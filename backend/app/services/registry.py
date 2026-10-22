@@ -109,6 +109,11 @@ def data_quality_scan(db) -> list[Finding]:
         elif now - a.inventory_verified_at > timedelta(days=TIMINGS["component_data_stale_days"]):
             out.append(raise_finding(db, "data_quality", "Medium", f"{a.name}: components",
                                      "Component inventory is stale", assigned_to=bu_head(db, a)))
+    for p in db.scalars(select(Person).where(Person.active == True)):  # noqa: E712
+        if not (p.email or "").strip():
+            out.append(raise_finding(db, "data_quality", "Medium", f"{p.name}: contact email",
+                                     "No email recorded, so notifications cannot reach this person",
+                                     assigned_to=first_with_role(db, "compliance")))
     return out
 
 

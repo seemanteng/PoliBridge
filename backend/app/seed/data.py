@@ -2,6 +2,7 @@
 from datetime import timedelta
 
 from ..clock import clock
+from ..identity import email_for
 from ..models import (Person, BusinessUnit, Asset, Component, DiscoveredAsset, Source, SourceVersion)
 from ..services import registry
 from ..services.common import create_claim
@@ -14,7 +15,7 @@ SAFEGUARDS_V1 = """§314.4(a) Designate an employee to coordinate the informatio
 
 
 def _p(db, did, name, role, manager=None, bu=None):
-    p = Person(directory_id=did, name=name, role=role, manager_id=manager.id if manager else None,
+    p = Person(directory_id=did, name=name, email=email_for(name), role=role, manager_id=manager.id if manager else None,
                business_unit_id=bu.id if bu else None)
     db.add(p)
     db.flush()

@@ -5,14 +5,17 @@ export const Badge = ({ kind = '', children }: { kind?: string; children: ReactN
   <span className={`badge ${kind}`}>{children}</span>
 )
 
-export const ImpactBadge = ({ impact }: { impact: string }) => (
-  <Badge kind={impact === 'High' ? 'high' : ''}>{impact} impact</Badge>
+const IMPACT: Record<string, [string, string]> = { High: ['imp-high', '▲▲▲'], Medium: ['imp-med', '▲▲'], Low: ['imp-low', '▲'] }
+
+// Impact is how much it matters (High, Medium or Low). It drives the deadlines, so it is shown on every list.
+export const ImpactBadge = ({ impact, short = false }: { impact: string; short?: boolean }) => (
+  <Badge kind={IMPACT[impact]?.[0] || ''}>{IMPACT[impact]?.[1]} {impact}{short ? '' : ' impact'}</Badge>
 )
 
 export function StateBadge({ state }: { state: string }) {
-  if (state === 'cannot_determine') return <Badge kind="cd">? Cannot Determine</Badge>
-  if (state === 'applies') return <Badge kind="applies">● Applies</Badge>
-  return <Badge kind="dna">– Does Not Apply</Badge>
+  if (state === 'cannot_determine') return <Badge kind="lbl-cd">? Cannot Determine</Badge>
+  if (state === 'applies') return <Badge kind="lbl-applies">● Applies</Badge>
+  return <Badge kind="lbl-dna">✓ Does Not Apply</Badge>
 }
 
 export const Loading = ({ error }: { error?: string | null }) => (

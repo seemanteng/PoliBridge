@@ -10,7 +10,7 @@ from ..db import get_db
 from .. import models as M
 from ..services import assignment, intake, views
 from ..services.assignment import OPEN_STATES, is_overdue
-from .routes import actor, guarded, one, require_editor
+from .routes import actor, guarded, on_behalf, one
 
 router = APIRouter(prefix="/api")
 
@@ -30,17 +30,23 @@ def acknowledgements(db=Depends(get_db)):
                 a = db.get(M.Asset, r["asset_id"])
                 t = db.get(M.Task, r["task_id"]) if r.get("task_id") else None
                 owner = db.get(M.Person, t.owner_id) if t and t.owner_id else a.owner
+                entered = None
                 if t is None:
                     status, who, when = "not_required", None, None
                 elif t.acknowledged_at:
                     status, who, when = "signed", db.get(M.Person, t.acknowledged_by_id).name, t.acknowledged_at
+                    e = db.scalar(select(M.AuditEvent).where(M.AuditEvent.entity == "task", M.AuditEvent.entity_id == t.id,
+                                                             M.AuditEvent.action == "entered_on_behalf")
+                                  .order_by(M.AuditEvent.id.desc()))
+                    if e and (e.detail or {}).get("did") == "acknowledge":
+                        entered = db.scalar(select(M.Person.name).where(M.Person.directory_id == e.actor))
                 else:
                     status, who, when = ("overdue" if now > t.ack_due else "pending"), None, None
                 bu = a.business_unit
                 rows.append({"key": f"t{r['asset_id']}-{o.id}", "obligation_id": o.id, "title": o.title, "kind": "Advisory",
                              "scope": a.name, "department": bu.name if bu else None, "owner": owner.name if owner else None,
-                             "owner_active": bool(owner and owner.active), "label": r["state"], "status": status,
-                             "signed_by": who, "signed_at": _iso(when), "due": _iso(t.ack_due) if t else None,
+                             "owner_active": bool(owner and owner.active), "label": r["state"], "impact": t.impact if t else None, "status": status,
+                             "signed_by": who, "signed_at": _iso(when), "entered_by": entered, "due": _iso(t.ack_due) if t else None,
                              "task_id": t.id if t else None, "department_key": None})
         elif o.status in ("open", "closed") and o.departments:
             for d in o.departments:
@@ -48,7 +54,7 @@ def acknowledgements(db=Depends(get_db)):
                              "kind": "Policy clause" if o.kind == "policy" else "Regulatory clause", "scope": d["department"],
                              "department": d["department"], "owner": d.get("owner"), "owner_active": True,
                              "label": d["label"], "status": "signed" if d.get("signed_at") else "pending",
-                             "signed_by": d.get("signed_by"), "signed_at": d.get("signed_at"), "due": None,
+                             "signed_by": d.get("signed_by"), "signed_at": d.get("signed_at"), "entered_by": d.get("entered_by"), "due": None,
                              "task_id": None, "department_key": d["department"]})
     return rows
 
@@ -59,7 +65,16 @@ class Signoff(BaseModel):
 
 @router.post("/obligations/{oid}/signoff")
 def signoff(oid: int, body: Signoff, db=Depends(get_db), me=Depends(actor)):
-    guarded(lambda: intake.signoff_department(db, one(db, M.Obligation, oid), me, body.department))(db)
+    ob = one(db, M.Obligation, oid)
+    row = next((d for d in ob.departments or [] if d["department"] == body.department), None)
+    owner = db.scalar(select(M.Person).where(M.Person.name == (row or {}).get("owner"))) if row else None
+    if owner is None:
+        raise HTTPException(400, f"{body.department} has no owner to sign off")
+    on_behalf(db, me, owner, "obligation", oid, f"sign_off {body.department}")
+    guarded(lambda: intake.signoff_department(db, ob, owner, body.department))(db)
+    if me.id != owner.id:
+        ob.departments = [{**d, "entered_by": me.name} if d["department"] == body.department else d for d in ob.departments]
+        db.commit()
     return {"ok": True}
 
 
@@ -112,13 +127,11 @@ def alerts(db=Depends(get_db)):
 
 @router.post("/tasks/{tid}/escalate")
 def escalate(tid: int, db=Depends(get_db), me=Depends(actor)):
-    require_editor(me)
     t = one(db, M.Task, tid)
     return {"told": guarded(lambda: assignment.escalate_now(db, t, me))(db)}
 
 
 @router.post("/tasks/{tid}/remind")
 def remind(tid: int, db=Depends(get_db), me=Depends(actor)):
-    require_editor(me)
     t = one(db, M.Task, tid)
     return {"told": guarded(lambda: assignment.send_reminder(db, t, me))(db)}

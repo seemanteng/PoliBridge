@@ -1,19 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, fmt, getUser, refreshAll, useApi } from '../api'
+import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, StateBadge, useAction } from '../ui'
 import { has } from '../filterUtils'
 
 const LABEL: Record<string, string> = { applies: 'Applies', does_not_apply: 'Does Not Apply', cannot_determine: 'Cannot Determine' }
-const LABEL_KIND: Record<string, string> = { applies: 'applies', does_not_apply: 'dna', cannot_determine: 'cd' }
+const LABEL_KIND: Record<string, string> = { applies: 'lbl-applies', does_not_apply: 'lbl-dna', cannot_determine: 'lbl-cd' }
 const LabelBadge = ({ label }: { label: string }) => <Badge kind={LABEL_KIND[label]}>{LABEL[label] || label}</Badge>
 
 type Stage = 'review' | 'waiting' | 'done'
-const STAGES: { key: Stage; n: string; title: string; hint: string }[] = [
-  { key: 'review', n: '1', title: 'Needs review', hint: 'Compliance or Legal decide what a changed clause means for each department' },
-  { key: 'waiting', n: '2', title: 'Waiting for owners', hint: 'Each owner confirms they have seen their label' },
-  { key: 'done', n: '3', title: 'Complete', hint: 'Everyone has signed off' },
-]
 
 // One item per advisory, and one per document (its clauses sit inside it), each with a stage.
 type Clause = { ob: any; rows: any[] }
@@ -59,35 +54,30 @@ function AddNewModal({ onClose, onPick }: { onClose: () => void; onPick: (k: 'ad
 export function AdvisoryList() {
   const { data: rows, error } = useApi('/acknowledgements')
   const { data: obs } = useApi('/obligations')
-  const { data: people } = useApi('/people')
   const { data: sources } = useApi('/sources')
   const [adding, setAdding] = useState<null | 'choose' | 'advisory' | 'document'>(null)
   const [rev, setRev] = useState<any>(null)
-  const [stage, setStage] = useState<Stage | null>(null)
   const [q, setQ] = useState('')
   const { run, error: aerr } = useAction()
-  if (!rows || !obs || !people || !sources) return <Loading error={error} />
-  const me = people.find((p: any) => p.directory_id === getUser())
+  if (!rows || !obs || !sources) return <Loading error={error} />
   const items = buildItems(rows, obs, sources)
-  // step 1 counts clauses awaiting a decision; steps 2 and 3 count individual sign-offs
-  const count = (s: Stage) => s === 'review' ? items.reduce((n, i) => n + i.candidates, 0)
-    : rows.filter((r: any) => (s === 'done' ? r.status === 'signed' : r.status === 'pending' || r.status === 'overdue')).length
-  const shown = items.filter((i) => (!stage || i.stage === stage) && has(q, i.title, i.kind, i.rows.map((r: any) => `${r.scope} ${r.owner}`).join(' '), (i.clauses || []).map((c: Clause) => c.ob.title).join(' ')))
+  const shown = items.filter((i) => has(q, i.title, i.kind, i.rows.map((r: any) => `${r.scope} ${r.owner}`).join(' '), (i.clauses || []).map((c: Clause) => c.ob.title).join(' ')))
   const sign = (r: any) => run(async () => {
     if (r.task_id) await api.post(`/tasks/${r.task_id}/acknowledge`)
     else await api.post(`/obligations/${r.obligation_id}/signoff`, { department: r.department_key })
     refreshAll()
   })
-  const mine = rows.filter((r: any) => r.owner === me?.name && (r.status === 'pending' || r.status === 'overdue'))
-  const canReview = me && (me.role === 'compliance' || me.role === 'legal')
-  const toReview: any[] = canReview ? obs.filter((o: any) => o.status === 'candidate') : []
+  const mine = rows.filter((r: any) => r.status === 'pending' || r.status === 'overdue')
+  const canReview = true
+  const toReview: any[] = obs.filter((o: any) => o.status === 'candidate')
 
   const cell = (r: any) => (
     <tr key={r.key}>
       <td>{r.scope}{r.kind === 'Advisory' && <div className="faint">{r.department}</div>}</td>
       <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}</td>
+      {r.kind === 'Advisory' && <td>{r.impact ? <ImpactBadge impact={r.impact} short /> : <span className="faint">—</span>}</td>}
       <td><LabelBadge label={r.label} /></td>
-      <td>{r.status === 'signed' ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{r.signed_by} · {fmt(r.signed_at)}</div></>
+      <td>{r.status === 'signed' ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{r.signed_by} · {fmt(r.signed_at)}{r.entered_by && <> · entered by {r.entered_by}</>}</div></>
         : r.status === 'overdue' ? <Badge kind="over">Overdue</Badge>
         : r.status === 'pending' ? <Badge kind="cd">Waiting</Badge>
         : <span className="muted">Nothing to do</span>}</td>
@@ -102,19 +92,9 @@ export function AdvisoryList() {
         <button className="btn primary" onClick={() => setAdding('choose')}>Add something new</button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 16 }}>
-        {STAGES.map((s) => (
-          <button key={s.key} className="card" onClick={() => setStage(stage === s.key ? null : s.key)} aria-pressed={stage === s.key}
-            style={{ textAlign: 'left', cursor: 'pointer', borderColor: stage === s.key ? 'var(--blue)' : undefined, boxShadow: stage === s.key ? '0 0 0 1px var(--blue)' : undefined }}>
-            <div className="faint">STEP {s.n}</div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}><span style={{ fontSize: 28, fontWeight: 500 }}>{count(s.key)}</span><b>{s.title}</b><span className="faint">{s.key === 'review' ? 'clauses' : 'sign-offs'}</span></div>
-            <div className="muted" style={{ fontSize: 12.5 }}>{s.hint}</div>
-          </button>))}
-      </div>
-
       <div className="card" style={{ marginTop: 14, borderColor: (mine.length || toReview.length) ? 'var(--blue)' : undefined }}>
-        <h2>Waiting for you{me ? ` (${me.name})` : ''}</h2>
-        {!mine.length && !toReview.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs you right now. To act as an owner, pick them in the sidebar user switcher.</p>}
+        <h2>Needs action</h2>
+        {!mine.length && !toReview.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs action right now.</p>}
         {toReview.length > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
             <div><b>{toReview.length} clause{toReview.length > 1 ? 's' : ''} to review</b><div className="muted">Decide what each changed clause means for the departments involved.</div></div>
@@ -122,13 +102,13 @@ export function AdvisoryList() {
         {mine.map((r: any) => (
           <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
             <div><b>{r.scope}</b> <LabelBadge label={r.label} />{r.status === 'overdue' && <> <Badge kind="over">Overdue</Badge></>}
-              <div className="muted">{r.title}</div></div>
-            <button className="btn sm primary" onClick={() => sign(r)}>Sign off</button></div>))}
+              <div className="muted">{r.title} · owner {r.owner || 'none'}</div></div>
+            <button className="btn sm primary" onClick={() => sign(r)}>Sign off for {r.owner ? r.owner.split(' ')[0] : 'owner'}</button></div>))}
         {aerr && <p className="err">{aerr}</p>}
       </div>
 
       <div className="sec" style={{ marginTop: 20 }}>
-        <h2>All items{stage ? ` · ${STAGES.find((s) => s.key === stage)!.title}` : ''}</h2>
+        <h2>All items</h2>
         <input style={{ width: 260 }} placeholder="Search items, systems, owners…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <p className="faint" style={{ margin: '4px 0 10px' }}>Labels: <b>Applies</b> means act. <b>Cannot Determine</b> means we lack the data, so investigate. <b>Does Not Apply</b> means confirmed unaffected.</p>
@@ -136,7 +116,7 @@ export function AdvisoryList() {
       {shown.map((i) => (
         <details key={i.key} className="card" open={i.stage === 'waiting'} style={{ marginBottom: 10 }}>
           <summary style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
-            <span><Badge>{i.kind}</Badge> {i.type === 'advisory' ? <Link to={`/acknowledgements/${i.id}`}><b>{i.title}</b></Link> : <b>{i.title}</b>}
+            <span><Badge>{i.kind}</Badge>{i.type === 'advisory' && i.rows.some((r: any) => r.impact) && <> <ImpactBadge impact={['High', 'Medium', 'Low'].find((l) => i.rows.some((r: any) => r.impact === l)) as string} /></>} {i.type === 'advisory' ? <Link to={`/acknowledgements/${i.id}`}><b>{i.title}</b></Link> : <b>{i.title}</b>}
               {i.type === 'document' && <div className="faint" style={{ marginTop: 3 }}>{i.clauses.length} changed clause{i.clauses.length > 1 ? 's' : ''}</div>}</span>
             <span style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
               {i.candidates ? <><Badge kind="cd">Needs review</Badge><div className="faint">{i.candidates} clause{i.candidates > 1 ? 's' : ''} to review</div></>
@@ -144,7 +124,7 @@ export function AdvisoryList() {
                   <div className="faint">{i.signed} of {i.need} signed off</div></>}</span>
           </summary>
           {i.type === 'advisory' ? (
-            <table style={{ marginTop: 8 }}><thead><tr><th>System / department</th><th>Owner</th><th>Label</th><th>Sign-off</th><th></th></tr></thead>
+            <table style={{ marginTop: 8 }}><thead><tr><th>System / department</th><th>Owner</th><th>Impact</th><th>Label</th><th>Sign-off</th><th></th></tr></thead>
               <tbody>{i.rows.map(cell)}</tbody></table>
           ) : i.clauses.map((c: Clause) => (
             <div key={c.ob.id} style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
@@ -159,7 +139,7 @@ export function AdvisoryList() {
             </div>))}
         </details>))}
       {!shown.length && <div className="card"><p className="muted">{items.length ? 'Nothing matches.' : 'Nothing here yet. Click “Add something new” to bring in a security advisory or a changed document.'}</p></div>}
-      <p className="faint" style={{ marginTop: 8 }}>Only the named owner can sign off, so switch user in the sidebar to sign off as them.</p>
+      <p className="faint" style={{ marginTop: 8 }}>A sign-off is recorded for the named owner. The audit log notes that Risk & Compliance entered it on their behalf.</p>
 
       {adding === 'choose' && <AddNewModal onClose={() => setAdding(null)} onPick={setAdding} />}
       {adding === 'advisory' && <IngestModal onClose={() => setAdding(null)} />}
@@ -224,7 +204,7 @@ function IngestDocModal({ onClose }: { onClose: () => void }) {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0' }}>
         <Badge kind="info">{res.changes.filter((c: any) => c.kind === 'changed').length} changed</Badge>
         <Badge>{res.changes.filter((c: any) => c.kind === 'new').length} new</Badge>
-        <Badge kind="over">{res.removed.length} removed</Badge><Badge kind="dna">{res.unchanged} unchanged</Badge></div>
+        <Badge kind="over">{res.removed.length} removed</Badge><Badge>{res.unchanged} unchanged</Badge></div>
       <div style={{ maxHeight: 340, overflow: 'auto' }}>
         <table><thead><tr><th>Clause</th><th>Change</th><th>Departments involved</th></tr></thead><tbody>
           {res.changes.map((c: any) => (
@@ -305,12 +285,41 @@ function IngestModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+// The draft's text can embed its own quote ("Source says: ..."), so peel the quotes off to leave just the summary.
+function summaryOf(g: any): string {
+  let t: string = g.text || ''
+  for (const c of g.citations || []) t = t.split(`"${c.quote}"`).join('').split(c.quote).join('')
+  return t.replace(/\s*Source says:\s*/g, ' ').replace(/^For [^:]{1,40}:\s*/, '').replace(/\s+/g, ' ').trim()
+}
+
+function Guidance({ g }: { g: any }) {
+  const label = { letterSpacing: '.06em' }
+  return (
+    <div style={{ marginTop: 12, border: '1px solid var(--line)', borderRadius: 8, padding: '12px 14px' }}>
+      {g.citations.map((c: any, i: number) => (
+        <div key={i}>
+          <div className="faint" style={label}>FROM {String(c.source).toUpperCase()}</div>
+          <blockquote style={{ margin: '6px 0 12px', padding: '8px 12px', borderLeft: '3px solid var(--blue)', background: 'var(--blue-soft)', borderRadius: '0 6px 6px 0' }}>“{c.quote}”</blockquote>
+        </div>))}
+      <div className="faint" style={label}>FIX REQUIRED</div>
+      <p style={{ margin: '4px 0 0', fontSize: 15 }}>{summaryOf(g)}</p>
+    </div>
+  )
+}
+
 export function AdvisoryDetail() {
   const { id } = useParams()
   const { data: o, error } = useApi(`/obligations/${id}`)
   const [hist, setHist] = useState(false)
-  const [guid, setGuid] = useState<any>(null)
   const { run, error: aerr } = useAction()
+  // advisories ingested before this was automatic have no fix drafted yet, so ask for it once
+  const asked = useRef(false)
+  useEffect(() => {
+    if (o?.advisory && !o.guidance.length && !asked.current) {
+      asked.current = true
+      api.post(`/obligations/${o.id}/guidance`, { role: 'system owner' }).then(refreshAll).catch(() => {})
+    }
+  }, [o])
   if (!o) return <Loading error={error} />
   if (!o.estate) return (
     <>
@@ -326,7 +335,7 @@ export function AdvisoryDetail() {
           {(o.departments || []).map((d: any) => (
             <tr key={d.department}><td><b>{d.department}</b></td><td>{d.owner || '—'}</td><td className="muted">{d.reason}</td>
               <td><LabelBadge label={d.label} />{d.decided_by && <div className="faint">by {d.decided_by}</div>}{d.note && <div className="faint">{d.note}</div>}</td>
-              <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}</div></>
+              <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}{d.entered_by && <> · entered by {d.entered_by}</>}</div></>
                 : o.status === 'candidate' ? <span className="muted">Awaiting Compliance / Legal</span>
                 : <button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}>Sign off</button>}</td></tr>))}
           {!(o.departments || []).length && <tr><td colSpan={5} className="muted">No departments recorded.</td></tr>}</tbody></table>
@@ -336,10 +345,6 @@ export function AdvisoryDetail() {
   const t = est.timings
   const g = est.gate
   const pct = (n: number) => `${(n / Math.max(1, g.total)) * 100}%`
-  const override = (row: any) => {
-    const reason = prompt(`Move ${row.asset} to Cannot Determine. Reason (recorded with the change):`)
-    if (reason) run(async () => { await api.post(`/obligations/${o.id}/override`, { asset_id: row.asset_id, new_label: 'cannot_determine', reason }); refreshAll() })
-  }
   return (
     <>
       <div className="head"><div>
@@ -370,26 +375,26 @@ export function AdvisoryDetail() {
         <div className="sec"><div><h2>Applicability across the estate</h2>
           <p className="muted">Missing or stale data becomes Cannot Determine — never Does Not Apply.</p></div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <Badge kind="applies">{est.counts.applies} Applies</Badge><Badge kind="cd">{est.counts.cannot_determine} Cannot Determine</Badge><Badge kind="dna">{est.counts.does_not_apply} Does Not Apply</Badge></div></div>
+            <Badge kind="lbl-applies">{est.counts.applies} Applies</Badge><Badge kind="lbl-cd">{est.counts.cannot_determine} Cannot Determine</Badge><Badge kind="lbl-dna">{est.counts.does_not_apply} Does Not Apply</Badge></div></div>
         <table>
-          <thead><tr><th>Asset</th><th>Owner</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
+          <thead><tr><th>Asset</th><th>Owner</th><th>Impact</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
           <tbody>{est.rows.map((r: any) => (
             <tr key={r.asset_id} className={r.state === 'cannot_determine' ? 'hl' : ''}>
               <td><b>{r.asset}</b><div className="faint">{r.tags}</div></td>
               <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}
                 {r.owner && !r.owner_active && <div className="red" style={{ fontSize: 12 }}>left the organisation</div>}</td>
+              <td>{r.impact ? <ImpactBadge impact={r.impact} short /> : <span className="faint">—</span>}</td>
               <td><span className="mono">{r.component_record}</span>
                 {r.provenance && <div className="faint mono">{r.provenance}</div>}
                 {r.stale && <div className="red" style={{ fontSize: 12 }}>stale · over 30 days</div>}</td>
-              <td><StateBadge state={r.state} />{r.state !== 'cannot_determine' &&
-                <div><button className="btn sm danger" onClick={() => override(r)}>Make more cautious</button></div>}</td>
+              <td><StateBadge state={r.state} /></td>
               <td style={{ maxWidth: 260 }}>{r.basis}</td>
               <td>{r.task_id ? <><Link to={`/remediations/${r.task_id}`} className="mono"><b>{r.task_ref}</b></Link>
                 <div className={r.task_overdue ? 'red' : 'muted'} style={{ fontSize: 12.5 }}>{r.task_status}</div></> : <span className="muted">No task</span>}</td>
             </tr>))}</tbody>
         </table>
         {aerr && <p className="err">{aerr}</p>}
-        <p className="faint" style={{ marginTop: 10 }}>Anyone may move an asset to a more cautious state with a reason. Moving it to Does Not Apply needs component-scoped evidence and an independent reviewer.</p>
+        <p className="faint" style={{ marginTop: 10 }}>A system only becomes Does Not Apply with evidence that covers the software and an independent reviewer. Missing, stale or conflicting data always stays Cannot Determine.</p>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -412,15 +417,14 @@ export function AdvisoryDetail() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="sec"><div><h2>Role-specific guidance</h2>
-          <p className="muted">Drafted from the source and policies with citations. RAG cannot confirm applicability, accept risk or authorise closure.</p></div>
-          <button className="btn" onClick={async () => { setGuid(await api.post(`/obligations/${o.id}/guidance`, { role: 'system owner' })); refreshAll() }}>Draft guidance</button></div>
-        {[...(guid ? [guid] : []), ...o.guidance.filter((x: any) => x.id !== guid?.id)].slice(0, 3).map((x: any) => (
-          <div key={x.id} className={`note ${x.status === 'draft' ? 'ok' : 'fail'}`} style={{ marginTop: 8 }}>
-            {x.status === 'draft' ? <><b>Grounded draft · {x.role}</b><p>{x.text}</p>
-              {x.citations.map((c: any, i: number) => <p key={i} className="faint">cites {c.source}: “{c.quote}”</p>)}</>
-              : <><b>Withheld for human review</b><p>{x.reason}</p></>}
-          </div>))}
+        <h2>Fixes Required</h2>
+        {(() => {
+          const x = o.guidance[o.guidance.length - 1]
+          if (!x) return <p className="muted" style={{ marginTop: 10 }}>Working out the fix…</p>
+          return x.status === 'draft' ? <Guidance g={x} /> : (
+            <div className="note fail" style={{ marginTop: 8 }}><b>Withheld for human review</b><p>{x.reason}</p>
+              <button className="btn sm" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/guidance`, { role: 'system owner' }); refreshAll() })}>Try again</button></div>)
+        })()}
       </div>
       {hist && <Modal title="Source & version history" onClose={() => setHist(false)}>
         <dl className="kv" style={{ marginTop: 10 }}><dt>Source</dt><dd>CISA/NVD (approved source)</dd><dt>CVE</dt><dd>{a.cve}</dd>

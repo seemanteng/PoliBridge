@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, fmt, getUser, refreshAll, useApi } from '../api'
+import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
 
@@ -20,21 +20,22 @@ export function TaskList() {
 }
 
 function Updates() {
-  const [scope, setScope] = useState<'open' | 'all' | 'mine'>('open')
-  const path = scope === 'mine' ? `/tasks?status=open&owner=${getUser()}` : scope === 'open' ? '/tasks?status=open' : '/tasks'
+  const [scope, setScope] = useState<'open' | 'all'>('open')
+  const path = scope === 'open' ? '/tasks?status=open' : '/tasks'
   const { data: tasks, error } = useApi(path)
   return (
     <>
       <div className="head" style={{ marginTop: 14 }}><p className="muted">Separate acknowledgement and remediation countdowns for every item. Canary tests are excluded.</p>
-        <div style={{ display: 'flex', gap: 6 }}>{(['open', 'mine', 'all'] as const).map((s) =>
-          <button key={s} className={`btn ${scope === s ? 'primary' : ''}`} onClick={() => setScope(s)}>{s === 'mine' ? 'Assigned to me' : s[0].toUpperCase() + s.slice(1)}</button>)}</div></div>
+        <div style={{ display: 'flex', gap: 6 }}>{(['open', 'all'] as const).map((s) =>
+          <button key={s} className={`btn ${scope === s ? 'primary' : ''}`} onClick={() => setScope(s)}>{s[0].toUpperCase() + s.slice(1)}</button>)}</div></div>
       <div className="card" style={{ marginTop: 16 }}>
         {!tasks ? <Loading error={error} /> : (
-          <table><thead><tr><th>Remediation</th><th>Owner</th><th>Status</th><th>Latest update</th><th>Acknowledge</th><th>Remediate</th></tr></thead>
+          <table><thead><tr><th>Remediation</th><th>Impact</th><th>Owner</th><th>Status</th><th>Latest update</th><th>Acknowledge</th><th>Remediate</th></tr></thead>
             <tbody>{tasks.map((t: any) => (
               <tr key={t.id} className={t.overdue ? 'bad' : ''}>
                 <td><Link to={`/remediations/${t.id}`}><b>{t.kind === 'investigation' ? 'Investigate' : 'Remediate'} {t.component} on {t.asset}</b></Link>
-                  <div className="faint mono">TSK-{String(t.id).padStart(4, '0')} · {t.impact}</div></td>
+                  <div className="faint mono">TSK-{String(t.id).padStart(4, '0')}</div></td>
+                <td><ImpactBadge impact={t.impact} short /></td>
                 <td>{t.owner}</td><td>{t.status.replaceAll('_', ' ')}{t.overdue && <> <Badge kind="over">overdue</Badge></>}</td>
                 <td style={{ maxWidth: 240 }}>{t.latest_update ? <><b style={{ fontWeight: 500 }}>{t.latest_update.title}</b><div className="faint">{fmt(t.latest_update.ts, true)}</div></> : <span className="muted">—</span>}</td>
                 <td className="mono">{t.acknowledged_at ? 'acknowledged' : `${t.countdown.ack_remaining_h}h`}</td>
@@ -55,7 +56,6 @@ export function TaskDetail() {
   const [dlg, setDlg] = useState<Dlg>(null)
   const { run, error: aerr } = useAction()
   if (!t) return <Loading error={error} />
-  const me = getUser()
   const act = (path: string) => run(async () => { await api.post(path); refreshAll() })
   const myRisks = (risks.data || []).filter((r: any) => r.task_id === t.id)
   const open = ['open', 'reopened', 'fixed_pending_review'].includes(t.status)
@@ -63,7 +63,7 @@ export function TaskDetail() {
     <>
       <div className="crumbs"><Link to={`/acknowledgements/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} />
-        {t.kind === 'investigation' && <Badge kind="cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
+        {t.kind === 'investigation' && <Badge kind="lbl-cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
         {t.overdue && <Badge kind="over">Overdue</Badge>}<Badge>{t.status.replaceAll('_', ' ')}</Badge></div>
       <h1>{t.title}</h1>
       <p className="muted" style={{ maxWidth: 780 }}>{t.summary}</p>
@@ -115,7 +115,6 @@ export function TaskDetail() {
       {dlg === 'risk' && <RiskModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'reject' && <ReasonModal t={t} kind="reject" onClose={() => setDlg(null)} />}
       {dlg === 'interim' && <ReasonModal t={t} kind="interim" onClose={() => setDlg(null)} />}
-      <span hidden>{me}</span>
     </>
   )
 }

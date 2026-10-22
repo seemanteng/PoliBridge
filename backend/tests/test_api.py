@@ -23,10 +23,13 @@ def test_api_flow(db):
     ob = r.json()
     assert ob["closable"] is False and len(ob["tasks"]) == 3
     portal = next(t for t in ob["tasks"] if t["asset"] == "Credit Report Portal")
-    assert c.post(f"/api/tasks/{portal['id']}/acknowledge", headers=h("ofoo")).status_code == 403
+    # anyone can act, but the sign-off is recorded for the owner and the audit trail says who entered it
+    assert c.post(f"/api/tasks/{portal['id']}/acknowledge", headers=h("ofoo")).status_code == 200
+    log = c.get(f"/api/timeline?entity=task&entity_id={portal['id']}").json()
+    assert any(e["action"] == "entered_on_behalf" and e["actor"] == "ofoo" for e in log)
     assert c.post(f"/api/tasks/{portal['id']}/acknowledge", headers=h("atan")).status_code == 200
     assert c.get("/api/dashboard").json()["cannot_determine"] == 2
-    assert c.post("/api/tasks/1/acknowledge").status_code == 401
+    assert c.post("/api/tasks/1/acknowledge").status_code != 401  # no header: the Risk & Compliance operator acts
     assert c.post("/api/clock/advance", json={"hours": 30}).status_code == 200
     assert c.get("/api/health").json()["ok"]
     app.dependency_overrides.clear()

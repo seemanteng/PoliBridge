@@ -1,18 +1,16 @@
-// Thin fetch wrapper. The caller's identity is a directory id kept in localStorage;
-// the backend treats it as the signed-in user (stand-in for SSO in the demonstrator).
+// Thin fetch wrapper. There is no sign-in: PoliBridge is operated by the Risk & Compliance team, who can see and edit
+// everything, so the backend acts as that team and records owner actions as entered on the owner's behalf.
 import { useCallback, useEffect, useState } from 'react'
 
 export type J = any // eslint-disable-line @typescript-eslint/no-explicit-any
 
-export const getUser = () => localStorage.getItem('pb_user') || 'mlin'
-export const setUser = (id: string) => localStorage.setItem('pb_user', id)
 
 export class ApiError extends Error {}
 
 async function call(method: string, path: string, body?: unknown): Promise<J> {
   const r = await fetch('/api' + path, {
     method,
-    headers: { 'Content-Type': 'application/json', 'X-User': getUser() },
+    headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const text = await r.text()
@@ -22,7 +20,7 @@ async function call(method: string, path: string, body?: unknown): Promise<J> {
 }
 
 async function upload(path: string, file: File): Promise<J> {
-  const r = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-User': getUser() }, body: file })
+  const r = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
   const text = await r.text()
   const data = text ? JSON.parse(text) : null
   if (!r.ok) throw new ApiError(typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail ?? r.statusText))

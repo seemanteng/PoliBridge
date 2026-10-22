@@ -1,5 +1,4 @@
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
-import { getUser, refreshAll, setUser, useApi } from './api'
 import Oversight from './pages/Oversight'
 import { AdvisoryList, AdvisoryDetail } from './pages/Advisories'
 import { TaskList, TaskDetail } from './pages/Tasks'
@@ -15,8 +14,6 @@ const NAV = [
 ] as const
 
 function Shell({ children }: { children: React.ReactNode }) {
-  const people = useApi('/people')
-  const me = people.data?.find((p: { directory_id: string }) => p.directory_id === getUser())
 
   return (
     <div className="shell">
@@ -28,14 +25,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           </NavLink>
         ))}
         <div className="spacer" />
-        <div className="who">
-          <select value={getUser()} onChange={(e) => { setUser(e.target.value); refreshAll(); location.reload() }}>
-            {people.data?.filter((p: { active: boolean }) => p.active).map((p: { directory_id: string; name: string }) => (
-              <option key={p.directory_id} value={p.directory_id}>{p.name}</option>
-            ))}
-          </select>
-          <div className="t">{me?.title || me?.role}</div>
-        </div>
+        <div className="who"><div className="t">Risk &amp; Compliance</div><div className="t" style={{ opacity: 0.7 }}>Sees and can edit everything</div></div>
       </nav>
       <main>{children}</main>
     </div>

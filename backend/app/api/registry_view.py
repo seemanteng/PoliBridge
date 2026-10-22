@@ -12,8 +12,9 @@ from ..clock import clock
 from ..db import get_db
 from .. import models as M
 from ..config import TIMINGS
+from ..identity import valid_email
 from ..services import assessment, assignment, audit, common, registry as reg, views
-from .routes import actor, require_editor as _require_editor
+from .routes import actor, approver_for, on_behalf
 
 router = APIRouter(prefix="/api/registry")
 
@@ -35,7 +36,7 @@ def registry(db=Depends(get_db)):
             owns.setdefault(a.owner_id, []).append(a.name)
 
     out_people = [{
-        "id": p.id, "directory_id": p.directory_id, "name": p.name, "title": p.title, "role": p.role,
+        "id": p.id, "directory_id": p.directory_id, "name": p.name, "email": p.email, "title": p.title, "role": p.role,
         "manager_id": p.manager_id, "manager": name(p.manager_id),
         "business_unit": next((b.name for b in bus if b.id == p.business_unit_id), None),
         "active": p.active, "deliverable": p.deliverable, "owns": owns.get(p.id, []),
@@ -94,6 +95,7 @@ ROLES = ["owner", "manager", "bu_head", "ciso", "risk_owner", "senior_mgmt", "ex
          "reviewer", "internal_audit"]
 class PersonIn(BaseModel):
     name: str
+    email: str
     directory_id: str | None = None
     title: str | None = None
     role: str = "owner"
@@ -104,12 +106,23 @@ class PersonIn(BaseModel):
 
 class PersonPatch(BaseModel):
     name: str | None = None
+    email: str | None = None
     title: str | None = None
     role: str | None = None
     manager_id: int | None = None
     business_unit_id: int | None = None
     deliverable: bool | None = None
     clear_manager: bool = False
+
+
+def _check_email(db, email: str, self_id=None) -> str:
+    email = (email or "").strip().lower()
+    if not valid_email(email):
+        raise HTTPException(400, "enter a valid email address, for example jane.doe@company.com")
+    other = db.scalar(select(M.Person).where(M.Person.email == email))
+    if other and other.id != self_id:
+        raise HTTPException(400, f"{email} already belongs to {other.name}")
+    return email
 
 
 def _check_links(db, role, manager_id, bu_id, self_id=None):
@@ -132,7 +145,6 @@ def _check_links(db, role, manager_id, bu_id, self_id=None):
 
 @router.post("/people")
 def add_person(body: PersonIn, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "name is required")
@@ -141,8 +153,9 @@ def add_person(body: PersonIn, db=Depends(get_db), me=Depends(actor)):
         raise HTTPException(400, "directory id must be 3-24 letters, numbers, dots, dashes or underscores")
     if common.person_by_directory_id(db, did):
         raise HTTPException(400, f"directory id '{did}' is already in use")
+    email = _check_email(db, body.email)
     _check_links(db, body.role, body.manager_id, body.business_unit_id)
-    p = M.Person(directory_id=did, name=name, title=(body.title or "").strip() or None, role=body.role,
+    p = M.Person(directory_id=did, name=name, email=email, title=(body.title or "").strip() or None, role=body.role,
                  manager_id=body.manager_id, business_unit_id=body.business_unit_id, deliverable=body.deliverable)
     db.add(p)
     db.flush()
@@ -153,7 +166,6 @@ def add_person(body: PersonIn, db=Depends(get_db), me=Depends(actor)):
 
 @router.patch("/people/{pid}")
 def edit_person(pid: int, body: PersonPatch, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     p = db.get(M.Person, pid)
     if not p:
         raise HTTPException(404, "person not found")
@@ -164,6 +176,8 @@ def edit_person(pid: int, body: PersonPatch, db=Depends(get_db), me=Depends(acto
         ch["manager_id"] = None
     if "name" in ch and not ch["name"].strip():
         raise HTTPException(400, "name is required")
+    if "email" in ch:
+        ch["email"] = _check_email(db, ch["email"], self_id=p.id)
     _check_links(db, ch.get("role"), ch.get("manager_id"), ch.get("business_unit_id"), self_id=p.id)
     moved = ("business_unit_id" in ch and ch["business_unit_id"] != p.business_unit_id) or \
             ("manager_id" in ch and ch["manager_id"] != p.manager_id)
@@ -183,8 +197,6 @@ class OwnerIn(BaseModel):
 @router.post("/assets/{aid}/owner")
 def reassign_owner(aid: int, body: OwnerIn, db=Depends(get_db), me=Depends(actor)):
     """Name a new owner. The old attestation is void until the new owner attests; open tasks move with no deadline reset."""
-    if me.role not in ("bu_head", "manager", "ciso", "risk_owner"):
-        raise HTTPException(403, "reassignment must be approved by a manager, business-unit head, CISO or risk owner")
     a = db.get(M.Asset, aid)
     new = db.get(M.Person, body.owner_id)
     if not a or not new:
@@ -200,7 +212,7 @@ def reassign_owner(aid: int, body: OwnerIn, db=Depends(get_db), me=Depends(actor
                                                 M.Claim.status == "active")):
         c.status, c.reason = "superseded", "owner reassigned"
     for t in db.scalars(select(M.Task).where(M.Task.asset_id == a.id, M.Task.status.in_(("open", "reopened", "fixed_pending_review")))):
-        assignment.transfer_task(db, t, new, me)
+        assignment.transfer_task(db, t, new, approver_for(db, ("bu_head", "manager", "ciso", "risk_owner")))
     for f in db.scalars(select(M.Finding).where(M.Finding.kind == "ownership_reassignment", M.Finding.status == "open",
                                                   M.Finding.subject == f"Reassign owner of {a.name}")):
         f.status = "resolved"
@@ -229,7 +241,6 @@ def _check_head(db, head_id):
 
 @router.post("/business-units")
 def add_department(body: DeptIn, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "name is required")
@@ -246,7 +257,6 @@ def add_department(body: DeptIn, db=Depends(get_db), me=Depends(actor)):
 
 @router.patch("/business-units/{bid}")
 def edit_department(bid: int, body: DeptPatch, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     b = db.get(M.BusinessUnit, bid)
     if not b:
         raise HTTPException(404, "department not found")
@@ -319,7 +329,6 @@ def _roots(roots):
 
 @router.post("/assets")
 def add_system(body: SystemIn, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "name is required")
@@ -347,7 +356,6 @@ def add_system(body: SystemIn, db=Depends(get_db), me=Depends(actor)):
 
 @router.patch("/assets/{aid}/details")
 def edit_system(aid: int, body: SystemPatch, db=Depends(get_db), me=Depends(actor)):
-    _require_editor(me)
     a = db.get(M.Asset, aid)
     if not a:
         raise HTTPException(404, "system not found")

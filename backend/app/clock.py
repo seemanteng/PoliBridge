@@ -4,7 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-_STATE = Path(__file__).resolve().parent.parent / "clock_state.json"
+from .config import DATA_DIR
+
+_STATE = DATA_DIR / "clock_state.json"
 
 
 class Clock:

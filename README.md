@@ -17,9 +17,17 @@ cd frontend && npm install && npm run dev      # http://localhost:5180
 
 On first start the database is seeded with the organisation as of today (staff, departments, six systems, approved
 sources) and nothing pre-played: the clock is real time. Ingest an advisory on **Acknowledgements** (**Fetch from NVD** pulls
-CVE-2017-5638 live) to see each system get a label, then sign off as the owners using the user switcher in the sidebar.
+CVE-2017-5638 live) to see each system get a label, then sign off for the owners.
 `npm run reset` returns the data to that starting point. Escalation and document reminders are checked every minute; use
-**Escalate** on the Alerts page to show escalation without waiting 24 hours. Auth is the `X-User` header, standing in for SSO.
+**Escalate** on the Alerts page to show escalation without waiting 24 hours.
+
+There is no sign-in and no role-based view: the Risk & Compliance team runs PoliBridge and can see and edit everything. Actions that belong to
+an owner or an approver (acknowledging, signing off, submitting evidence, approving a risk acceptance) are recorded for that named person, and the
+audit log notes that Risk & Compliance entered them. The control rules that compare people still apply, for example the evidence reviewer must
+be someone other than whoever submitted or fixed it.
+
+Everything is saved in `backend/polibridge.db` and survives refreshes and restarts. Only `npm run reset` clears it. To try things
+without touching the demo data, start a throwaway copy: `POLIBRIDGE_DATA_DIR=/tmp/pb-rehearsal npm run dev:backend`.
 
 The March 2017 storyline is still in `backend/app/seed/replay.py` and runs on a frozen clock for tests and development
 (`POST /api/demo/reset?mode=replay`); the UI does not offer it.
