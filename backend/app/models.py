@@ -102,10 +102,11 @@ class Advisory(Base):
     cve: Mapped[str] = mapped_column(String)
     source_id: Mapped[int | None] = mapped_column(ForeignKey("source.id"), nullable=True)
     product: Mapped[str] = mapped_column(String)
-    affected_versions: Mapped[list] = mapped_column(JSON, default=list)  # ["2.3.5-2.3.31", "2.5-2.5.10"]
+    affected_versions: Mapped[list] = mapped_column(JSON, default=list)  # [">=2.2.3 <2.3.32", ">=2.5.0 <2.5.10.1"]
     fixed_version: Mapped[str | None] = mapped_column(String, nullable=True)
     cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
     kev: Mapped[bool] = mapped_column(Boolean, default=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     is_canary: Mapped[bool] = mapped_column(Boolean, default=False)
 

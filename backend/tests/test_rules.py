@@ -90,3 +90,10 @@ def test_non_recursive_scope_fails_tree_coverage():
     assert not E.covers_tree(["/opt/acis/"], "/opt/acis")
     assert E.covers_tree(["/opt/acis/**"], "/opt/acis")
     assert E.scope_gaps(["/opt/acis"], ["/opt/acis"]) == ["/opt/acis"]
+
+
+def test_version_specs_from_nvd():
+    from app.rules.versions import in_range
+    assert in_range("2.3.31", ">=2.2.3 <2.3.32") and not in_range("2.3.32", ">=2.2.3 <2.3.32")
+    assert in_range("2.5.10", ">=2.5.0 <2.5.10.1") and not in_range("2.5.10.1", ">=2.5.0 <2.5.10.1")
+    assert in_range("2.0", ">1.9") and not in_range("1.9", ">1.9")

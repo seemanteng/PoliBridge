@@ -7,9 +7,10 @@ from pydantic import BaseModel
 from sqlalchemy import select, inspect
 
 from ..clock import clock
+from ..rules.versions import norm
 from ..db import get_db
 from .. import models as M
-from ..services import (registry, intake, rag, assessment, assignment, closure, assurance, common, views)
+from ..services import (registry, intake, nvd, rag, assessment, assignment, closure, assurance, common, views)
 
 router = APIRouter(prefix="/api")
 
@@ -256,6 +257,25 @@ class AdvisoryIn(BaseModel):
     kev: bool = False
     fixed_version: str | None = None
     source_name: str = "CISA/NVD"
+    description: str | None = None
+
+
+@router.get("/advisories/lookup")
+def lookup_advisory(cve: str, db=Depends(get_db), me=Depends(actor)):
+    """Pre-fill from NVD + CISA KEV. Suggests the registered component name that matches the CPE product."""
+    try:
+        res = nvd.lookup(cve)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ConnectionError as e:
+        raise HTTPException(502, str(e))
+    known = {c.name for c in db.scalars(select(M.Component))}
+    for c in res["candidates"]:
+        n = norm(c["product"])
+        c["inventory_name"] = next((k for k in sorted(known) if n and n in norm(k)), None)
+    return res
 
 
 @router.post("/advisories")

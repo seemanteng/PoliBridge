@@ -12,13 +12,13 @@ from .assessment import assess_obligation
 
 def ingest_advisory(db, *, cve: str, product: str, affected_versions: list[str], cvss: float | None,
                     kev: bool = False, fixed_version: str | None = None, source_name: str = "CISA/NVD",
-                    is_canary: bool = False, is_test: bool = False) -> Obligation:
+                    description: str | None = None, is_canary: bool = False, is_test: bool = False) -> Obligation:
     """Fast path (C1): advisories bypass the Compliance/Legal gate and are matched at once."""
     src = db.scalar(select(Source).where(Source.name == source_name, Source.kind == "advisory"))
     if src is None:
         raise ValueError(f"'{source_name}' is not in the approved-source registry")
     adv = Advisory(cve=cve, source_id=src.id, product=product, affected_versions=affected_versions, cvss=cvss,
-                   kev=kev, fixed_version=fixed_version, published_at=clock.now(), is_canary=is_canary)
+                   kev=kev, fixed_version=fixed_version, description=description, published_at=clock.now(), is_canary=is_canary)
     db.add(adv)
     db.flush()
     ob = Obligation(kind="advisory", title=f"{cve}: {product}", advisory_id=adv.id, source_id=src.id,

@@ -22,4 +22,10 @@ def get_db():
 
 def init_db(eng=None):
     from . import models  # noqa: F401
-    Base.metadata.create_all(eng or engine)
+    eng = eng or engine
+    Base.metadata.create_all(eng)
+    # create_all never alters existing tables: add columns introduced after a database was first seeded
+    with eng.begin() as c:
+        cols = {r[1] for r in c.exec_driver_sql("PRAGMA table_info(advisory)")}
+        if cols and "description" not in cols:
+            c.exec_driver_sql("ALTER TABLE advisory ADD COLUMN description TEXT")

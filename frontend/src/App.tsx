@@ -6,10 +6,12 @@ import { TaskList, TaskDetail } from './pages/Tasks'
 import { EvidenceList, EvidenceReview } from './pages/Evidence'
 import { ClaimList, ClaimDetail } from './pages/Claims'
 import Canary from './pages/Canary'
+import Documents from './pages/Documents'
+import Registry from './pages/Registry'
 
 const NAV = [
   ['/', 'Oversight', '▦'], ['/advisories', 'Advisories & obligations', '▤'], ['/tasks', 'Tasks', '☑'],
-  ['/evidence', 'Evidence review', '▣'], ['/claims', 'Claims', '◷'], ['/canary', 'Canary tests', '∿'],
+  ['/evidence', 'Evidence review', '▣'], ['/registry', 'Registry', '☰'], ['/claims', 'Claims', '◷'], ['/canary', 'Canary tests', '∿'], ['/documents', 'Documents', '▭'],
 ] as const
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -72,9 +74,11 @@ export default function App() {
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/evidence" element={<EvidenceList />} />
         <Route path="/evidence/:id" element={<EvidenceReview />} />
+        <Route path="/registry" element={<Registry />} />
         <Route path="/claims" element={<ClaimList />} />
         <Route path="/claims/:id" element={<ClaimDetail />} />
         <Route path="/canary" element={<Canary />} />
+        <Route path="/documents" element={<Documents />} />
       </Routes>
     </Shell>
   )

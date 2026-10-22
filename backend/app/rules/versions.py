@@ -13,9 +13,16 @@ def _cmp(a: tuple, b: tuple) -> int:
 
 
 def in_range(version: str, spec: str) -> bool:
-    """spec is 'x', 'lo-hi' (inclusive), or '<=hi' / '<hi'."""
+    """spec is 'x', 'lo-hi' (inclusive), '<=hi' / '<hi', '>=lo' / '>lo', or several of the
+    comparison forms separated by spaces (all must hold), e.g. '>=2.0 <2.3.5'."""
     v = parse(version)
     spec = spec.strip()
+    if " " in spec:
+        return all(in_range(version, part) for part in spec.split())
+    if spec.startswith(">="):
+        return _cmp(v, parse(spec[2:])) >= 0
+    if spec.startswith(">"):
+        return _cmp(v, parse(spec[1:])) > 0
     if spec.startswith("<="):
         return _cmp(v, parse(spec[2:])) <= 0
     if spec.startswith("<"):

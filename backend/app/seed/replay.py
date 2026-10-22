@@ -14,6 +14,41 @@ from sqlalchemy import select
 
 D = datetime
 
+# CVE-2017-5638 description as published by NVD.
+STRUTS_DESCRIPTION = (
+    "The Jakarta Multipart parser in Apache Struts 2 2.3.x before 2.3.32 and 2.5.x before 2.5.10.1 has incorrect "
+    "exception handling and error-message generation during file-upload attempts, which allows remote attackers to "
+    "execute arbitrary commands via a crafted Content-Type, Content-Disposition, or Content-Length HTTP header, as "
+    "exploited in the wild in March 2017 with a Content-Type header containing a #cmd= string.")
+
+# Fictional internal policy. The guidance feature (services/rag.py) treats two different "within N hours/days"
+# limits across policy lines as a conflict and withholds its output, so only the patch clause carries a time limit.
+INFOSEC_POLICY_V1 = """\
+Patch critical vulnerabilities on internet-facing systems within 48 hours of an advisory.
+Owners must acknowledge security advisories assigned to them.
+Every system must have a named owner, recorded by directory identity and not by email address or distribution list.
+Owners must confirm their systems and software components at least every six months, and when they change role or leave.
+Each security advisory must be matched against every registered system, and a system with missing or stale component data must be treated as unresolved, never as unaffected.
+Where a patch cannot be applied, the owner must record a compensating control or a documented risk acceptance approved by the accountable risk owner.
+Risk acceptances are time-limited and must be reopened for review when they expire.
+A fix is complete only when evidence examined the affected component on the affected system, was generated after the change, and was approved by a reviewer independent of the person who did the work.
+A claim that a system does not use an affected component must be supported by evidence of the same standard as a fix.
+Monitoring controls relied on as compensating controls must have a named owner, and their claims lapse when the underlying certificate or configuration expires."""
+
+# 16 CFR 314.4 "Elements" as in force in 2016 (the rule Equifax was subject to). One clause per line:
+# the change detector in services/intake.py keys on the leading reference.
+FTC_SAFEGUARDS_2016 = """\
+§314.4(a) Designate an employee or employees to coordinate your information security program.
+§314.4(b) Identify reasonably foreseeable internal and external risks to the security, confidentiality, and integrity of customer information that could result in the unauthorized disclosure, misuse, alteration, destruction or other compromise of such information, and assess the sufficiency of any safeguards in place to control these risks. At a minimum, such a risk assessment should include consideration of risks in each relevant area of your operations, including:
+§314.4(b)(1) Employee training and management;
+§314.4(b)(2) Information systems, including network and software design, as well as information processing, storage, transmission and disposal; and
+§314.4(b)(3) Detecting, preventing and responding to attacks, intrusions, or other systems failures.
+§314.4(c) Design and implement information safeguards to control the risks you identify through risk assessment, and regularly test or otherwise monitor the effectiveness of the safeguards' key controls, systems, and procedures.
+§314.4(d) Oversee service providers, by:
+§314.4(d)(1) Taking reasonable steps to select and retain service providers that are capable of maintaining appropriate safeguards for the customer information at issue; and
+§314.4(d)(2) Requiring your service providers by contract to implement and maintain such safeguards.
+§314.4(e) Evaluate and adjust your information security program in light of the results of the testing and monitoring required by paragraph (c) of this section; any material changes to your operations or business arrangements; or any other circumstances that you know or have reason to know may have a material impact on your information security program."""
+
 
 def _person(db, did, name, role, title=None, manager=None, bu=None, active=True):
     p = Person(directory_id=did, name=name, role=role, title=title, manager_id=manager.id if manager else None,
@@ -26,18 +61,25 @@ def _person(db, did, name, role, title=None, manager=None, bu=None, active=True)
 def load_baseline(db):
     clock.set(D(2017, 2, 28, 8, 0))
     bu = BusinessUnit(name="Consumer Services")
-    db.add(bu)
+    units = {n: BusinessUnit(name=n) for n in ("Executive Office", "Information Security", "Risk & Compliance",
+                                               "Legal", "Internal Audit")}
+    db.add_all([bu, *units.values()])
     db.flush()
-    ciso = _person(db, "crhodes", "Casey Rhodes", "ciso", "CISO")
-    _person(db, "sharlow", "Sam Harlow", "senior_mgmt", "Chief Operating Officer")
-    _person(db, "phargreave", "Paul Hargreave", "risk_owner", "Accountable risk owner")
-    _person(db, "mlin", "Mei Lin", "compliance", "Compliance Technology")
-    _person(db, "lmarsh", "Leo Marsh", "legal", "Legal counsel")
-    _person(db, "cmendes", "Carla Mendes", "cco", "Chief Compliance Officer")
-    _person(db, "ichen", "Ivy Chen", "internal_audit", "Internal Audit")
-    _person(db, "amensah", "Ama Mensah", "reviewer", "Independent reviewer")
-    _person(db, "tbrandt", "Tess Brandt", "reviewer", "Independent reviewer")
-    varga = _person(db, "lvarga", "Lena Varga", "manager", "VP Consumer Technology", bu=bu)
+    # Synthetic org chart: everyone reports to someone (the CEO to the board) and belongs to a department.
+    ceo = _person(db, "evoss", "Elena Voss", "executive", "Chief Executive Officer", bu=units["Executive Office"])
+    coo = _person(db, "sharlow", "Sam Harlow", "senior_mgmt", "Chief Operating Officer", ceo, units["Executive Office"])
+    ciso = _person(db, "crhodes", "Casey Rhodes", "ciso", "CISO", coo, units["Information Security"])
+    _person(db, "phargreave", "Paul Hargreave", "risk_owner", "Accountable risk owner", coo, units["Risk & Compliance"])
+    cco = _person(db, "cmendes", "Carla Mendes", "cco", "Chief Compliance Officer", ceo, units["Risk & Compliance"])
+    _person(db, "mlin", "Mei Lin", "compliance", "Compliance Technology", cco, units["Risk & Compliance"])
+    legal = _person(db, "lmarsh", "Leo Marsh", "legal", "Legal counsel", ceo, units["Legal"])
+    audit = _person(db, "ichen", "Ivy Chen", "internal_audit", "Internal Audit", ceo, units["Internal Audit"])
+    _person(db, "amensah", "Ama Mensah", "reviewer", "Independent reviewer", audit, units["Internal Audit"])
+    _person(db, "tbrandt", "Tess Brandt", "reviewer", "Independent reviewer", audit, units["Internal Audit"])
+    for name, head in (("Executive Office", ceo), ("Information Security", ciso), ("Risk & Compliance", cco),
+                       ("Legal", legal), ("Internal Audit", audit)):
+        units[name].head_id = head.id
+    varga = _person(db, "lvarga", "Lena Varga", "manager", "VP Consumer Technology", coo, bu)
     whit = _person(db, "dwhitfield", "Dana Whitfield", "bu_head", "Head, Consumer Services", manager=varga, bu=bu)
     bu.head_id = whit.id
     okafor = _person(db, "rokafor", "Remi Okafor", "owner", "Former ACIS owner", manager=varga, bu=bu, active=False)
@@ -100,16 +142,14 @@ def load_baseline(db):
     db.add(Dependency(claim_id=cert.id, dependent_type="board_item", dependent_id=board.id))
 
     cisa = Source(name="CISA/NVD", kind="advisory", url="https://www.cisa.gov", approved_by="Compliance")
-    ftc = Source(name="FTC Safeguards Rule", kind="regulator", approved_by="Legal")
+    ftc = Source(name="FTC Safeguards Rule", kind="regulator", approved_by="Legal",
+                 url="https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-314")
     pol = Source(name="Equifax InfoSec Policy", kind="policy", approved_by="CISO")
     db.add_all([cisa, ftc, pol])
     db.flush()
-    db.add(SourceVersion(source_id=pol.id, version="1", ingested_at=clock.now(),
-                         text="Patch critical vulnerabilities on internet-facing systems within 48 hours of an advisory.\n"
-                              "Owners must acknowledge security advisories assigned to them."))
+    db.add(SourceVersion(source_id=pol.id, version="1", ingested_at=clock.now(), text=INFOSEC_POLICY_V1))
     db.add(SourceVersion(source_id=ftc.id, version="2016", ingested_at=clock.now(),
-                         text="§314.4(a) Designate an employee to coordinate the information security program.\n"
-                              "§314.4(c)(2) Review access controls periodically."))
+                         text=FTC_SAFEGUARDS_2016))
     db.commit()
 
 
@@ -135,8 +175,9 @@ def run_storyline(db):
     # 8 Mar 09:12 advisory ingested and matched against every asset
     clock.set(D(2017, 3, 8, 9, 12))
     ob = intake.ingest_advisory(db, cve="CVE-2017-5638", product="struts2-core",
-                                affected_versions=["2.3.5-2.3.31", "2.5-2.5.10"], cvss=10.0, kev=True,
-                                fixed_version="2.3.32, 2.5.10.1")
+                                affected_versions=[">=2.2.3 <2.3.32", ">=2.5.0 <2.5.10.1"], cvss=9.8, kev=True,
+                                fixed_version="2.3.32, 2.5.10.1",  # as published by NVD / CISA KEV
+                                description=STRUTS_DESCRIPTION)
     tasks = {db.get(Asset, t.asset_id).name.split(" ·")[0]: t
              for t in db.scalars(select(Task).where(Task.obligation_id == ob.id))}
     db.commit()

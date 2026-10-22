@@ -71,21 +71,45 @@ function Candidates({ items }: { items: any[] }) {
 function IngestModal({ onClose }: { onClose: () => void }) {
   const nav = useNavigate()
   const { run, error, busy } = useAction()
-  const [f, setF] = useState({ cve: 'CVE-2017-5638', product: 'struts2-core', versions: '2.3.5-2.3.31, 2.5-2.5.10', cvss: '10', kev: true, fixed: '2.3.32' })
+  const [f, setF] = useState({ cve: 'CVE-2017-5638', product: 'struts2-core', versions: '>=2.2.3 <2.3.32, >=2.5.0 <2.5.10.1', cvss: '9.8', kev: true, fixed: '2.3.32, 2.5.10.1' })
   const submit = async () => {
     const ok = await run(async () => {
       const r = await api.post('/advisories', {
         cve: f.cve, product: f.product, affected_versions: f.versions.split(',').map((s) => s.trim()).filter(Boolean),
-        cvss: f.cvss ? Number(f.cvss) : null, kev: f.kev, fixed_version: f.fixed || null,
+        cvss: f.cvss ? Number(f.cvss) : null, kev: f.kev, fixed_version: f.fixed || null, description: desc || null,
       })
       refreshAll(); nav(`/advisories/${r.id}`)
     })
     if (ok) onClose()
   }
   const set = (k: string, v: any) => setF({ ...f, [k]: v })
+  const [cands, setCands] = useState<any[]>([])
+  const [desc, setDesc] = useState('')
+  const [note, setNote] = useState('')
+  const pick = (c: any) => setF((p) => ({ ...p, product: c.inventory_name || c.product, versions: c.versions.join(', '), fixed: c.fixed_version || '' }))
+  const fetchNvd = async () => {
+    setNote('')
+    await run(async () => {
+      const r = await api.get(`/advisories/lookup?cve=${encodeURIComponent(f.cve.trim())}`)
+      setCands(r.candidates)
+      setDesc(r.description || '')
+      const c = r.candidates.find((x: any) => x.inventory_name) || r.candidates[0]
+      setF((p) => ({ ...p, cve: r.cve, cvss: r.cvss == null ? '' : String(r.cvss), kev: !!r.kev,
+        ...(c ? { product: c.inventory_name || c.product, versions: c.versions.join(', '), fixed: c.fixed_version || '' } : {}) }))
+      setNote(`Filled from NVD${r.kev == null ? ' (KEV feed unreachable, check the box yourself)' : ' and CISA KEV'}. ` +
+        (c ? '' : 'No affected-product data found; enter it by hand.'))
+    })
+  }
   return (
-    <Modal title="Ingest advisory" sub="Stands in for the CISA/NVD feed. It is matched against every asset at once." onClose={onClose}>
-      <label>CVE</label><input value={f.cve} onChange={(e) => set('cve', e.target.value)} />
+    <Modal title="Ingest advisory" sub="Fetch real data from NVD and CISA KEV, or type it in. It is matched against every asset at once." onClose={onClose}>
+      <label>CVE</label>
+      <div style={{ display: 'flex', gap: 8 }}><input value={f.cve} onChange={(e) => set('cve', e.target.value)} />
+        <button className="btn" disabled={busy} onClick={fetchNvd}>Fetch from NVD</button></div>
+      {note && <p className="muted">{note}</p>}
+      {cands.length > 1 && <><label>NVD lists {cands.length} affected products — pick the one in your inventories</label>
+        <select onChange={(e) => pick(cands[Number(e.target.value)])} value={cands.findIndex((c) => (c.inventory_name || c.product) === f.product)}>
+          {cands.map((c, i) => <option key={c.product} value={i}>{c.product}{c.inventory_name ? ` → ${c.inventory_name}` : ''}</option>)}
+        </select></>}
       <label>Affected product (as recorded in component inventories)</label><input value={f.product} onChange={(e) => set('product', e.target.value)} />
       <label>Affected versions (comma separated ranges)</label><input value={f.versions} onChange={(e) => set('versions', e.target.value)} />
       <label>CVSS (leave empty if unknown — never lowers impact)</label><input value={f.cvss} onChange={(e) => set('cvss', e.target.value)} />
@@ -187,7 +211,7 @@ export function AdvisoryDetail() {
       {hist && <Modal title="Source & version history" onClose={() => setHist(false)}>
         <dl className="kv" style={{ marginTop: 10 }}><dt>Source</dt><dd>CISA/NVD (approved source)</dd><dt>CVE</dt><dd>{a.cve}</dd>
           <dt>Published</dt><dd>{fmt(a.published_at, true)}</dd><dt>Affected</dt><dd className="mono">{a.affected_versions.join(', ')}</dd></dl>
-        <div className="actions"><button className="btn" onClick={() => setHist(false)}>Close</button></div></Modal>}
+        <div className="actions"><Link className="btn" to={`/documents?doc=advisory/${a.id}`}>Preview as document</Link> <button className="btn" onClick={() => setHist(false)}>Close</button></div></Modal>}
     </>
   )
 }
