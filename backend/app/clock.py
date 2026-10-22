@@ -17,6 +17,10 @@ class Clock:
             return self._frozen
         return datetime.now(timezone.utc).replace(tzinfo=None) + self._offset
 
+    @property
+    def simulated(self) -> bool:
+        return self._frozen is not None
+
     def set(self, when: datetime):
         self._frozen = when
 

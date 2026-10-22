@@ -1,29 +1,46 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt, getUser, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, useAction } from '../ui'
+import { EvidenceList } from './Evidence'
 
 export function TaskList() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'evidence' ? 'evidence' : 'updates'
+  return (
+    <>
+      <div className="head"><div><h1>Remediations</h1>
+        <p className="muted" style={{ maxWidth: 720 }}>The work each owner must do to fix or investigate a finding, and the proof that it was done. Escalations for work that has stalled are on the Alerts page.</p></div></div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        <button className={`btn ${tab === 'updates' ? 'primary' : ''}`} onClick={() => setParams({})}>Remediation updates</button>
+        <button className={`btn ${tab === 'evidence' ? 'primary' : ''}`} onClick={() => setParams({ tab: 'evidence' })}>Evidence review</button></div>
+      {tab === 'updates' ? <Updates /> : <EvidenceList embedded />}
+    </>
+  )
+}
+
+function Updates() {
   const [scope, setScope] = useState<'open' | 'all' | 'mine'>('open')
   const path = scope === 'mine' ? `/tasks?status=open&owner=${getUser()}` : scope === 'open' ? '/tasks?status=open' : '/tasks'
   const { data: tasks, error } = useApi(path)
   return (
     <>
-      <div className="head"><div><h1>Tasks</h1><p className="muted">Separate acknowledgement and remediation countdowns for every task. Canary tests are excluded.</p></div>
+      <div className="head" style={{ marginTop: 14 }}><p className="muted">Separate acknowledgement and remediation countdowns for every item. Canary tests are excluded.</p>
         <div style={{ display: 'flex', gap: 6 }}>{(['open', 'mine', 'all'] as const).map((s) =>
           <button key={s} className={`btn ${scope === s ? 'primary' : ''}`} onClick={() => setScope(s)}>{s === 'mine' ? 'Assigned to me' : s[0].toUpperCase() + s.slice(1)}</button>)}</div></div>
       <div className="card" style={{ marginTop: 16 }}>
         {!tasks ? <Loading error={error} /> : (
-          <table><thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Acknowledge</th><th>Remediate</th></tr></thead>
+          <table><thead><tr><th>Remediation</th><th>Owner</th><th>Status</th><th>Latest update</th><th>Acknowledge</th><th>Remediate</th></tr></thead>
             <tbody>{tasks.map((t: any) => (
               <tr key={t.id} className={t.overdue ? 'bad' : ''}>
-                <td><Link to={`/tasks/${t.id}`}><b>{t.kind === 'investigation' ? 'Investigate' : 'Remediate'} {t.component} on {t.asset}</b></Link>
+                <td><Link to={`/remediations/${t.id}`}><b>{t.kind === 'investigation' ? 'Investigate' : 'Remediate'} {t.component} on {t.asset}</b></Link>
                   <div className="faint mono">TSK-{String(t.id).padStart(4, '0')} · {t.impact}</div></td>
                 <td>{t.owner}</td><td>{t.status.replaceAll('_', ' ')}{t.overdue && <> <Badge kind="over">overdue</Badge></>}</td>
+                <td style={{ maxWidth: 240 }}>{t.latest_update ? <><b style={{ fontWeight: 500 }}>{t.latest_update.title}</b><div className="faint">{fmt(t.latest_update.ts, true)}</div></> : <span className="muted">—</span>}</td>
                 <td className="mono">{t.acknowledged_at ? 'acknowledged' : `${t.countdown.ack_remaining_h}h`}</td>
                 <td className={`mono ${t.countdown.remediate_remaining_h < 0 ? 'red' : ''}`}>{t.countdown.remediate_remaining_h}h</td>
               </tr>))}
-              {!tasks.length && <tr><td colSpan={5} className="muted">No tasks.</td></tr>}</tbody></table>)}
+              {!tasks.length && <tr><td colSpan={6} className="muted">Nothing here.</td></tr>}</tbody></table>)}
       </div>
     </>
   )
@@ -44,7 +61,7 @@ export function TaskDetail() {
   const open = ['open', 'reopened', 'fixed_pending_review'].includes(t.status)
   return (
     <>
-      <div className="crumbs"><Link to={`/advisories/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
+      <div className="crumbs"><Link to={`/acknowledgements/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} />
         {t.kind === 'investigation' && <Badge kind="cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
         {t.overdue && <Badge kind="over">Overdue</Badge>}<Badge>{t.status.replaceAll('_', ' ')}</Badge></div>

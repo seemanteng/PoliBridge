@@ -126,6 +126,9 @@ class Obligation(Base):
     impact: Mapped[str | None] = mapped_column(String, nullable=True)
     approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     applicability_decision: Mapped[str | None] = mapped_column(String, nullable=True)  # human, regulatory
+    previous_quotation: Mapped[str | None] = mapped_column(Text, nullable=True)  # the clause before this version changed it
+    # departments involved: [{department, owner, reason, label, decided_by}]; label is applies|does_not_apply|cannot_determine
+    departments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -292,3 +295,15 @@ class BoardItem(Base):
     title: Mapped[str] = mapped_column(String)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="open")  # open|reopened
+
+
+class DocumentReminder(Base):
+    """Reminds a named person to upload an updated version of a document on a fixed cycle (simulated clock)."""
+    __tablename__ = "document_reminder"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document: Mapped[str] = mapped_column(String)  # document title (file name without extension)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("person.id"))
+    every_days: Mapped[int] = mapped_column(Integer)
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

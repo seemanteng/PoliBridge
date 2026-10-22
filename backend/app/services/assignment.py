@@ -72,6 +72,46 @@ def acknowledge(db, task: Task, person: Person):
     audit.log(db, person.directory_id, "task", task.id, "acknowledged")
 
 
+def escalate_now(db, task: Task, by: Person) -> str:
+    """Take the next escalation step immediately instead of waiting for the timer. Returns who was told."""
+    if task.status not in OPEN_STATES:
+        raise ValueError("this item is no longer open")
+    asset = db.get(Asset, task.asset_id)
+    msg = f"{task.impact} task {task.id} on {asset.name}: escalated by {by.name}"
+    if task.acknowledged_at is None:
+        for kind, who in (("escalate_manager", "manager"), ("escalate_ciso", "ciso")):
+            if not _sent(db, task, kind):
+                target = _manager_of(db, task) if who == "manager" else first_with_role(db, "ciso")
+                if target is None:
+                    raise ValueError(f"there is no active {who} to escalate to")
+                notify(db, task=task, person=target, kind=kind, message=msg + " (unacknowledged)")
+                audit.log(db, by.directory_id, "task", task.id, "escalated", to=who, reason="manual escalation: unacknowledged")
+                return target.name
+    if not _sent(db, task, "deadline_missed"):
+        targets = people_with_role(db, "risk_owner") + people_with_role(db, "senior_mgmt")
+        if not targets:
+            raise ValueError("there is no risk owner or senior manager to escalate to")
+        for p in targets:
+            notify(db, task=task, person=p, kind="deadline_missed", message=msg + " (to risk owner and senior management)")
+        task.board_flag = True
+        audit.log(db, by.directory_id, "task", task.id, "escalated", to="risk_owner+senior_mgmt",
+                  reason="manual escalation", board_report=True)
+        return " and ".join(p.name for p in targets)
+    raise ValueError("already escalated to the top of the ladder: risk owner and senior management")
+
+
+def send_reminder(db, task: Task, by: Person) -> str:
+    owner = db.get(Person, task.owner_id) if task.owner_id else None
+    if owner is None:
+        raise ValueError("this item has no owner to remind")
+    asset = db.get(Asset, task.asset_id)
+    notify(db, task=task, person=owner, kind="reminder",
+           message=f"Reminder from {by.name}: {task.impact} task {task.id} on {asset.name} needs your "
+                   f"{'acknowledgement' if task.acknowledged_at is None else 'remediation update'}")
+    audit.log(db, by.directory_id, "task", task.id, "reminder_sent", to=owner.directory_id)
+    return owner.name
+
+
 def reroute_task(db, task: Task, reason: str, actor="system"):
     """Immediate reroute to the BU head. Deadlines are untouched, so a rejection
     can never become an informal extension (B4)."""

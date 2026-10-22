@@ -21,10 +21,20 @@ async function call(method: string, path: string, body?: unknown): Promise<J> {
   return data
 }
 
+async function upload(path: string, file: File): Promise<J> {
+  const r = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-User': getUser() }, body: file })
+  const text = await r.text()
+  const data = text ? JSON.parse(text) : null
+  if (!r.ok) throw new ApiError(typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail ?? r.statusText))
+  return data
+}
+
 export const api = {
+  upload,
   get: (p: string) => call('GET', p),
   post: (p: string, b?: unknown) => call('POST', p, b ?? {}),
   patch: (p: string, b?: unknown) => call('PATCH', p, b ?? {}),
+  del: (p: string) => call('DELETE', p),
 }
 
 // Bumped after every mutation or clock change so all mounted views refetch.

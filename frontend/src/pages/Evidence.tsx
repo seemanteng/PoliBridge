@@ -3,12 +3,23 @@ import { Link, useParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, Loading, useAction } from '../ui'
 
-export function EvidenceList() {
+export function EvidenceList({ embedded = false }: { embedded?: boolean }) {
   const { data: ev, error } = useApi('/evidence')
   return (
     <>
-      <h1>Evidence review</h1>
+      {!embedded && <h1>Evidence review</h1>}
       <p className="muted">Every claim is held to the same standard as a fix: the evidence must have examined the component.</p>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>What is this page?</h2>
+        <p style={{ marginTop: 6 }}>When an owner says "we fixed it" or "this system does not use that software", that is only a <b>claim</b>. This is where the claim is checked
+          against the proof the owner submitted, by someone other than the person who did the work.</p>
+        <div className="grid g3" style={{ marginTop: 10 }}>
+          <div><b>1 · Owner submits proof</b><div className="muted">Which system, which component, what was scanned, the method, and when.</div></div>
+          <div><b>2 · The system checks it</b><div className="muted">Right asset? Did the scan cover the component's folder? Strong enough method? Recent enough? Is the reviewer independent?</div></div>
+          <div><b>3 · An independent reviewer decides</b><div className="muted">Approve and the claim becomes verified, with an expiry. Reject and the task stays open and escalates.</div></div>
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>This is the Equifax lesson: its scan ran but never looked inside the vulnerable component. Open the ACIS evidence below to see exactly that failure caught.</p>
+      </div>
       <div className="card" style={{ marginTop: 16 }}>
         {!ev ? <Loading error={error} /> : (
           <table><thead><tr><th>Evidence</th><th>Task</th><th>Submitted by</th><th>Status</th></tr></thead>
@@ -34,7 +45,7 @@ export function EvidenceReview() {
   const examined = e.examined as string[]
   return (
     <>
-      <div className="crumbs"><Link to={`/tasks/${e.task_id}`}>{e.task_ref}</Link> / EVD-{String(e.id).padStart(4, '0')}</div>
+      <div className="crumbs"><Link to={`/remediations/${e.task_id}`}>{e.task_ref}</Link> / EVD-{String(e.id).padStart(4, '0')}</div>
       <div style={{ float: 'right', marginTop: 8 }}><Link to={`/documents?doc=evidence/${e.id}`}>Preview as document</Link></div>
       <div className="mono faint" style={{ marginTop: 8 }}>CLAIM · {e.purpose === 'absence' ? 'APPLICABILITY' : 'REMEDIATION'}</div>
       <h1>{e.claim}</h1>

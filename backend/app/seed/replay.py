@@ -58,8 +58,16 @@ def _person(db, did, name, role, title=None, manager=None, bu=None, active=True)
     return p
 
 
-def load_baseline(db):
-    clock.set(D(2017, 2, 28, 8, 0))
+# The moment the baseline organisation is "as of" in the March 2017 storyline (8 Mar, before the advisory).
+BASE = D(2017, 3, 8, 9, 0)
+
+
+def load_baseline(db, anchor: datetime | None = None):
+    """Build the organisation. Dates are written as March 2017 and shifted so that BASE lands on `anchor`.
+    The default reproduces 2017 exactly (the replay and the tests); pass the current time for a live demo."""
+    A = anchor or BASE
+    T = lambda d: A + (d - BASE)  # noqa: E731
+    clock.set(T(D(2017, 2, 28, 8, 0)))
     bu = BusinessUnit(name="Consumer Services")
     units = {n: BusinessUnit(name=n) for n in ("Executive Office", "Information Security", "Risk & Compliance",
                                                "Legal", "Internal Audit")}
@@ -102,18 +110,18 @@ def load_baseline(db):
     acis = asset("ACIS · consumer dispute portal", okafor, internet_facing=True, critical=True, customer_facing=True,
                  data_sensitivity="confidential", app_roots=["/opt/acis"],
                  legacy_contact="acis-ops (distribution list)")
-    cf = asset("Credit File API", adeyemi, D(2017, 3, 2), "sbom", ["/opt/cfapi/**"],
+    cf = asset("Credit File API", adeyemi, T(D(2017, 3, 2)), "sbom", ["/opt/cfapi/**"],
                [("struts2-core", "2.3.30", "/opt/cfapi/webapps/struts")], internet_facing=True, critical=True,
                data_sensitivity="confidential", app_roots=["/opt/cfapi"])
-    mp = asset("Member portal", kowalski, D(2017, 3, 6), "sca", ["/opt/member/**"],
+    mp = asset("Member portal", kowalski, T(D(2017, 3, 6)), "sca", ["/opt/member/**"],
                [("struts2-core", "2.5.8", "/opt/member/webapps/struts")], internet_facing=True, critical=True,
                customer_facing=True, data_sensitivity="confidential", app_roots=["/opt/member"])
-    batch = asset("Batch reporting server", ramirez, D(2016, 1, 15), "sbom", ["/srv/batch/**"],
+    batch = asset("Batch reporting server", ramirez, T(D(2016, 1, 15)), "sbom", ["/srv/batch/**"],
                   [("jasperreports", "6.1.0", "/srv/batch/jasper")], app_roots=["/srv/batch"])
-    hr = asset("HR payroll · vendor SaaS", ramirez, D(2017, 3, 1), "vendor_sbom", ["/vendor/hr/**"],
+    hr = asset("HR payroll · vendor SaaS", ramirez, T(D(2017, 3, 1)), "vendor_sbom", ["/vendor/hr/**"],
                [("rails", "4.2.7", "/vendor/hr/app")], internet_facing=True, data_sensitivity="confidential",
                app_roots=["/vendor/hr"])
-    wiki = asset("Internal wiki", ramirez, D(2017, 3, 7), "authenticated_scan", ["/srv/wiki/**"],
+    wiki = asset("Internal wiki", ramirez, T(D(2017, 3, 7)), "authenticated_scan", ["/srv/wiki/**"],
                  [("confluence", "5.9", "/srv/wiki/app")], app_roots=["/srv/wiki"])
     db.add_all([DiscoveredAsset(name=a.name, source="network", internet_facing=a.internet_facing)
                 for a in (acis, cf, mp, batch, hr, wiki)])
@@ -123,10 +131,10 @@ def load_baseline(db):
     # Ownership of ACIS lapsed when its owner left (2 Feb)
     old = create_claim(db, actor="directory", claim_type="ownership", asset_id=acis.id, value="attested",
                        statement="Remi Okafor owns ACIS", owner_id=okafor.id, submitter_id=okafor.id,
-                       verification_method="attestation", evidence_ts=D(2016, 9, 1), expiry=D(2017, 3, 1))
+                       verification_method="attestation", evidence_ts=T(D(2016, 9, 1)), expiry=T(D(2017, 3, 1)))
     old.status, old.reason = "expired", "Leaver event invalidated attestation"
-    old.expiry = D(2017, 2, 2)
-    db.add(AuditEvent(ts=D(2017, 2, 2, 8), actor="directory", entity="person", entity_id=okafor.id, action="jml_leaver",
+    old.expiry = T(D(2017, 2, 2))
+    db.add(AuditEvent(ts=T(D(2017, 2, 2, 8)), actor="directory", entity="person", entity_id=okafor.id, action="jml_leaver",
                       detail={}))
     raise_finding(db, "ownership_reassignment", "High", "Reassign owner of ACIS · consumer dispute portal",
                   "Remi Okafor flagged as leaver on 2 Feb; no replacement named.", assigned_to=whit)
@@ -134,7 +142,7 @@ def load_baseline(db):
     cert = create_claim(db, actor="kosei", claim_type="monitoring", asset_id=acis.id, value="in_effect",
                         statement="ACIS outbound traffic is inspected", owner_id=osei.id, submitter_id=osei.id,
                         reviewer_id=P(db, "tbrandt").id, verification_method="certificate_check",
-                        evidence_ts=D(2016, 9, 16, 10, 20), expiry=D(2017, 3, 14, 23, 59),
+                        evidence_ts=T(D(2016, 9, 16, 10, 20)), expiry=T(D(2017, 3, 14, 23, 59)),
                         evidence_scope=["cert:SSLV-02", "Decryption policy for ACIS egress"], component="SSLV-02")
     board = BoardItem(ref="Q1-07", title="monitoring coverage", owner_id=ciso.id)
     db.add(board)
@@ -151,6 +159,9 @@ def load_baseline(db):
     db.add(SourceVersion(source_id=ftc.id, version="2016", ingested_at=clock.now(),
                          text=FTC_SAFEGUARDS_2016))
     db.commit()
+    if anchor is not None:
+        clock.unfreeze()
+        clock.save()
 
 
 def _at(db, when: datetime):
@@ -233,3 +244,20 @@ def run_storyline(db):
     db.commit()
     clock.save()
     return {"obligation_id": ob.id, "now": clock.now().isoformat()}
+
+
+def reset_demo(mode: str = "baseline") -> dict:
+    """baseline: the organisation as of today on real time, nothing pre-played. replay: the March 2017 storyline on
+    a frozen clock (kept for tests and development)."""
+    from ..db import Base, engine, SessionLocal
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with SessionLocal() as s:
+        if mode == "replay":
+            load_baseline(s)
+            out = run_storyline(s)
+        else:
+            clock.unfreeze()
+            load_baseline(s, anchor=clock.now())
+            out = {"now": clock.now().isoformat()}
+    return {"mode": mode, **out}

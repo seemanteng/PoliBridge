@@ -1,71 +1,254 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, fmt, refreshAll, useApi } from '../api'
+import { api, fmt, getUser, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, StateBadge, useAction } from '../ui'
+import { has } from '../filterUtils'
+
+const LABEL: Record<string, string> = { applies: 'Applies', does_not_apply: 'Does Not Apply', cannot_determine: 'Cannot Determine' }
+const LABEL_KIND: Record<string, string> = { applies: 'applies', does_not_apply: 'dna', cannot_determine: 'cd' }
+const LabelBadge = ({ label }: { label: string }) => <Badge kind={LABEL_KIND[label]}>{LABEL[label] || label}</Badge>
+
+type Stage = 'review' | 'waiting' | 'done'
+const STAGES: { key: Stage; n: string; title: string; hint: string }[] = [
+  { key: 'review', n: '1', title: 'Needs review', hint: 'Compliance or Legal decide what a changed clause means for each department' },
+  { key: 'waiting', n: '2', title: 'Waiting for owners', hint: 'Each owner confirms they have seen their label' },
+  { key: 'done', n: '3', title: 'Complete', hint: 'Everyone has signed off' },
+]
+
+// One item per advisory, and one per document (its clauses sit inside it), each with a stage.
+type Clause = { ob: any; rows: any[] }
+function buildItems(rows: any[], obs: any[], sources: any[]) {
+  const items: any[] = []
+  const done = (rs: any[]) => { const need = rs.filter((r) => r.status !== 'not_required'); return { need: need.length, signed: need.filter((r) => r.status === 'signed').length } }
+  const adv = new Map<number, any[]>()
+  const docs = new Map<number, Clause[]>()
+  for (const o of obs.filter((x) => x.status === 'candidate')) docs.set(o.source_id, [...(docs.get(o.source_id) || []), { ob: o, rows: [] }])
+  for (const r of rows) {
+    const ob = obs.find((o) => o.id === r.obligation_id)
+    if (ob?.source_id && ob.kind !== 'advisory') {
+      const cl = docs.get(ob.source_id) || []
+      const hit = cl.find((c) => c.ob.id === ob.id)
+      if (hit) hit.rows.push(r); else cl.push({ ob, rows: [r] })
+      docs.set(ob.source_id, cl)
+    } else adv.set(r.obligation_id, [...(adv.get(r.obligation_id) || []), r])
+  }
+  for (const [id, rs] of adv) items.push({ key: `a${id}`, id, type: 'advisory', kind: 'Security advisory', title: rs[0].title, rows: rs, candidates: 0, ...done(rs) })
+  for (const [sid, clauses] of docs) {
+    const rs = clauses.flatMap((c) => c.rows)
+    items.push({ key: `d${sid}`, id: clauses[0].ob.id, type: 'document', kind: 'Document', title: sources.find((x) => x.id === sid)?.name || 'Document',
+      clauses, rows: rs, candidates: clauses.filter((c) => c.ob.status === 'candidate').length, ...done(rs) })
+  }
+  return items.map((it) => {
+    const stage: Stage = it.candidates ? 'review' : it.need > it.signed ? 'waiting' : 'done'
+    return { ...it, stage, overdue: it.rows.some((r: any) => r.status === 'overdue') }
+  }).sort((a, b) => ['waiting', 'review', 'done'].indexOf(a.stage) - ['waiting', 'review', 'done'].indexOf(b.stage) || b.id - a.id)
+}
+
+function AddNewModal({ onClose, onPick }: { onClose: () => void; onPick: (k: 'advisory' | 'document') => void }) {
+  const opt = (k: 'advisory' | 'document', title: string, text: string) => (
+    <button className="btn block" style={{ textAlign: 'left', marginBottom: 10, padding: '12px 14px' }} onClick={() => onPick(k)}>
+      <b>{title}</b><div className="muted" style={{ marginTop: 2 }}>{text}</div></button>)
+  return (
+    <Modal title="What is new?" sub="Either one creates items below for the affected systems or departments." onClose={onClose}>
+      {opt('advisory', 'A security advisory', 'A vulnerability notice such as a CVE. Fetch the details from NVD, and every system is matched and labelled at once.')}
+      {opt('document', 'A document', 'A regulation or policy that changed. Pick an uploaded file and PoliBridge shows which clauses are new or different.')}
+    </Modal>
+  )
+}
 
 export function AdvisoryList() {
-  const { data: obs, error } = useApi('/obligations')
-  const [open, setOpen] = useState(false)
-  if (!obs) return <Loading error={error} />
-  const advisories = obs.filter((o: any) => o.kind === 'advisory')
-  const candidates = obs.filter((o: any) => o.status === 'candidate')
-  const others = obs.filter((o: any) => o.kind !== 'advisory' && o.status !== 'candidate')
+  const { data: rows, error } = useApi('/acknowledgements')
+  const { data: obs } = useApi('/obligations')
+  const { data: people } = useApi('/people')
+  const { data: sources } = useApi('/sources')
+  const [adding, setAdding] = useState<null | 'choose' | 'advisory' | 'document'>(null)
+  const [rev, setRev] = useState<any>(null)
+  const [stage, setStage] = useState<Stage | null>(null)
+  const [q, setQ] = useState('')
+  const { run, error: aerr } = useAction()
+  if (!rows || !obs || !people || !sources) return <Loading error={error} />
+  const me = people.find((p: any) => p.directory_id === getUser())
+  const items = buildItems(rows, obs, sources)
+  // step 1 counts clauses awaiting a decision; steps 2 and 3 count individual sign-offs
+  const count = (s: Stage) => s === 'review' ? items.reduce((n, i) => n + i.candidates, 0)
+    : rows.filter((r: any) => (s === 'done' ? r.status === 'signed' : r.status === 'pending' || r.status === 'overdue')).length
+  const shown = items.filter((i) => (!stage || i.stage === stage) && has(q, i.title, i.kind, i.rows.map((r: any) => `${r.scope} ${r.owner}`).join(' '), (i.clauses || []).map((c: Clause) => c.ob.title).join(' ')))
+  const sign = (r: any) => run(async () => {
+    if (r.task_id) await api.post(`/tasks/${r.task_id}/acknowledge`)
+    else await api.post(`/obligations/${r.obligation_id}/signoff`, { department: r.department_key })
+    refreshAll()
+  })
+  const mine = rows.filter((r: any) => r.owner === me?.name && (r.status === 'pending' || r.status === 'overdue'))
+  const canReview = me && (me.role === 'compliance' || me.role === 'legal')
+  const toReview: any[] = canReview ? obs.filter((o: any) => o.status === 'candidate') : []
+
+  const cell = (r: any) => (
+    <tr key={r.key}>
+      <td>{r.scope}{r.kind === 'Advisory' && <div className="faint">{r.department}</div>}</td>
+      <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}</td>
+      <td><LabelBadge label={r.label} /></td>
+      <td>{r.status === 'signed' ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{r.signed_by} · {fmt(r.signed_at)}</div></>
+        : r.status === 'overdue' ? <Badge kind="over">Overdue</Badge>
+        : r.status === 'pending' ? <Badge kind="cd">Waiting</Badge>
+        : <span className="muted">Nothing to do</span>}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>{(r.status === 'pending' || r.status === 'overdue') && <button className="btn sm primary" onClick={() => sign(r)}>Sign off</button>}</td>
+    </tr>)
+
   return (
     <>
       <div className="head">
-        <div><h1>Advisories &amp; obligations</h1>
-          <p className="muted">Advisories take the fast path; regulatory and policy changes wait for Compliance or Legal.</p></div>
-        <button className="btn primary" onClick={() => setOpen(true)}>Ingest advisory</button>
+        <div><h1>Acknowledgements</h1>
+          <p className="muted" style={{ maxWidth: 720 }}>When something new comes in, every affected system or department gets a label, and its owner confirms they have seen it. Anything left unconfirmed escalates on the Alerts page.</p></div>
+        <button className="btn primary" onClick={() => setAdding('choose')}>Add something new</button>
       </div>
-      <div className="card" style={{ marginTop: 16 }}>
-        <table>
-          <thead><tr><th>Obligation</th><th>Kind</th><th>Impact</th><th>Status</th><th>Tasks closed</th></tr></thead>
-          <tbody>
-            {advisories.map((o: any) => (
-              <tr key={o.id}>
-                <td><Link to={`/advisories/${o.id}`}><b>{o.title}</b></Link></td><td>Security advisory</td>
-                <td>{o.impact ? <ImpactBadge impact={o.impact} /> : '—'}</td><td>{o.status}</td>
-                <td>{o.task_counts.closed} / {o.task_counts.total}</td>
-              </tr>
-            ))}
-            {!advisories.length && <tr><td colSpan={5} className="muted">No advisories yet.</td></tr>}
-          </tbody>
-        </table>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 16 }}>
+        {STAGES.map((s) => (
+          <button key={s.key} className="card" onClick={() => setStage(stage === s.key ? null : s.key)} aria-pressed={stage === s.key}
+            style={{ textAlign: 'left', cursor: 'pointer', borderColor: stage === s.key ? 'var(--blue)' : undefined, boxShadow: stage === s.key ? '0 0 0 1px var(--blue)' : undefined }}>
+            <div className="faint">STEP {s.n}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}><span style={{ fontSize: 28, fontWeight: 500 }}>{count(s.key)}</span><b>{s.title}</b><span className="faint">{s.key === 'review' ? 'clauses' : 'sign-offs'}</span></div>
+            <div className="muted" style={{ fontSize: 12.5 }}>{s.hint}</div>
+          </button>))}
       </div>
-      {candidates.length > 0 && <Candidates items={candidates} />}
-      {others.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h2>Approved regulatory and policy obligations</h2>
-          <table><tbody>{others.map((o: any) => (
-            <tr key={o.id}><td><b>{o.title}</b><div className="faint">“{o.quotation}”</div></td><td>{o.status}</td><td>{o.applicability_decision || ''}</td></tr>
-          ))}</tbody></table>
-        </div>
-      )}
-      {open && <IngestModal onClose={() => setOpen(false)} />}
+
+      <div className="card" style={{ marginTop: 14, borderColor: (mine.length || toReview.length) ? 'var(--blue)' : undefined }}>
+        <h2>Waiting for you{me ? ` (${me.name})` : ''}</h2>
+        {!mine.length && !toReview.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs you right now. To act as an owner, pick them in the sidebar user switcher.</p>}
+        {toReview.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+            <div><b>{toReview.length} clause{toReview.length > 1 ? 's' : ''} to review</b><div className="muted">Decide what each changed clause means for the departments involved.</div></div>
+            <button className="btn sm primary" onClick={() => setRev(toReview[0])}>Review next clause</button></div>)}
+        {mine.map((r: any) => (
+          <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+            <div><b>{r.scope}</b> <LabelBadge label={r.label} />{r.status === 'overdue' && <> <Badge kind="over">Overdue</Badge></>}
+              <div className="muted">{r.title}</div></div>
+            <button className="btn sm primary" onClick={() => sign(r)}>Sign off</button></div>))}
+        {aerr && <p className="err">{aerr}</p>}
+      </div>
+
+      <div className="sec" style={{ marginTop: 20 }}>
+        <h2>All items{stage ? ` · ${STAGES.find((s) => s.key === stage)!.title}` : ''}</h2>
+        <input style={{ width: 260 }} placeholder="Search items, systems, owners…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <p className="faint" style={{ margin: '4px 0 10px' }}>Labels: <b>Applies</b> means act. <b>Cannot Determine</b> means we lack the data, so investigate. <b>Does Not Apply</b> means confirmed unaffected.</p>
+
+      {shown.map((i) => (
+        <details key={i.key} className="card" open={i.stage === 'waiting'} style={{ marginBottom: 10 }}>
+          <summary style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+            <span><Badge>{i.kind}</Badge> {i.type === 'advisory' ? <Link to={`/acknowledgements/${i.id}`}><b>{i.title}</b></Link> : <b>{i.title}</b>}
+              {i.type === 'document' && <div className="faint" style={{ marginTop: 3 }}>{i.clauses.length} changed clause{i.clauses.length > 1 ? 's' : ''}</div>}</span>
+            <span style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+              {i.candidates ? <><Badge kind="cd">Needs review</Badge><div className="faint">{i.candidates} clause{i.candidates > 1 ? 's' : ''} to review</div></>
+                : <><Badge kind={i.stage === 'done' ? 'info' : i.overdue ? 'over' : 'cd'}>{i.stage === 'done' ? 'Complete' : i.overdue ? 'Overdue' : 'Waiting'}</Badge>
+                  <div className="faint">{i.signed} of {i.need} signed off</div></>}</span>
+          </summary>
+          {i.type === 'advisory' ? (
+            <table style={{ marginTop: 8 }}><thead><tr><th>System / department</th><th>Owner</th><th>Label</th><th>Sign-off</th><th></th></tr></thead>
+              <tbody>{i.rows.map(cell)}</tbody></table>
+          ) : i.clauses.map((c: Clause) => (
+            <div key={c.ob.id} style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+              <Link to={`/acknowledgements/${c.ob.id}`}><b>{c.ob.source_ref || c.ob.title}</b></Link>
+              <div className="faint" style={{ margin: '2px 0 6px' }}>“{(c.ob.quotation || '').slice(0, 170)}{(c.ob.quotation || '').length > 170 ? '…' : ''}”</div>
+              {c.ob.status === 'candidate' ? (
+                <div>{(c.ob.departments || []).map((d: any) => <div key={d.department}><b>{d.department}</b> <span className="faint">owner {d.owner || '—'} · {d.reason}</span></div>)}
+                  {canReview ? <p style={{ marginTop: 6 }}><button className="btn sm primary" onClick={() => setRev(c.ob)}>Review</button></p>
+                    : <p className="faint" style={{ marginTop: 6 }}>Waiting for Compliance or Legal to review.</p>}</div>
+              ) : (
+                <table><thead><tr><th>Department</th><th>Owner</th><th>Label</th><th>Sign-off</th><th></th></tr></thead><tbody>{c.rows.map(cell)}</tbody></table>)}
+            </div>))}
+        </details>))}
+      {!shown.length && <div className="card"><p className="muted">{items.length ? 'Nothing matches.' : 'Nothing here yet. Click “Add something new” to bring in a security advisory or a changed document.'}</p></div>}
+      <p className="faint" style={{ marginTop: 8 }}>Only the named owner can sign off, so switch user in the sidebar to sign off as them.</p>
+
+      {adding === 'choose' && <AddNewModal onClose={() => setAdding(null)} onPick={setAdding} />}
+      {adding === 'advisory' && <IngestModal onClose={() => setAdding(null)} />}
+      {adding === 'document' && <IngestDocModal onClose={() => setAdding(null)} />}
+      {rev && <ReviewModal o={rev} onClose={() => setRev(null)} />}
     </>
   )
 }
 
-function Candidates({ items }: { items: any[] }) {
-  const { run, error } = useAction()
-  const decide = (id: number, approve: boolean) =>
-    run(async () => { await api.post(`/obligations/${id}/decide`, { approve, applicability: approve ? 'applies' : null }); refreshAll() })
+function ReviewModal({ o, onClose }: { o: any; onClose: () => void }) {
+  const { run, error, busy } = useAction()
+  const [dec, setDec] = useState<Record<string, { label: string; note: string }>>(
+    Object.fromEntries((o.departments || []).map((d: any) => [d.department, { label: d.label, note: d.note || '' }])))
+  const [action, setAction] = useState(o.required_action && !o.required_action.startsWith('To be confirmed') ? o.required_action : '')
+  const set = (d: string, k: 'label' | 'note', v: string) => setDec({ ...dec, [d]: { ...dec[d], [k]: v } })
+  const go = (approve: boolean) => run(async () => {
+    await api.post(`/obligations/${o.id}/decide`, { approve, required_action: action || null,
+      departments: approve ? Object.entries(dec).map(([department, v]) => ({ department, label: v.label, note: v.note || null })) : null })
+    refreshAll(); onClose()
+  }).then((ok) => ok)
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <h2>Candidate obligations awaiting Compliance / Legal</h2>
-      <p className="muted" style={{ marginBottom: 6 }}>Quoted exactly from the changed clause. Materiality and applicability are human decisions.</p>
-      <table><tbody>{items.map((o) => (
-        <tr key={o.id}>
-          <td><b>{o.title}</b><div className="faint">“{o.quotation}”</div></td>
-          <td style={{ whiteSpace: 'nowrap' }}>
-            <button className="btn sm primary" onClick={() => decide(o.id, true)}>Approve</button>{' '}
-            <button className="btn sm" onClick={() => decide(o.id, false)}>Reject</button>
-          </td>
-        </tr>
-      ))}</tbody></table>
+    <Modal title={o.title} sub="Applicability of a regulatory clause is a decision for Compliance or Legal, not the system." onClose={onClose}>
+      {o.previous_quotation && <><label>Previous wording</label><div className="note" style={{ background: '#f6f6f3' }}>{o.previous_quotation}</div></>}
+      <label>{o.previous_quotation ? 'New wording' : 'New clause'}</label><div className="note ok">{o.quotation}</div>
+      <label style={{ marginTop: 12 }}>Departments involved</label>
+      <table><thead><tr><th>Department · owner</th><th>Why involved</th><th>Decision</th></tr></thead><tbody>
+        {(o.departments || []).map((d: any) => (
+          <tr key={d.department}><td><b>{d.department}</b><div className="faint">owner {d.owner || '—'}</div></td>
+            <td className="muted" style={{ maxWidth: 180 }}>{d.reason}</td>
+            <td><select value={dec[d.department].label} onChange={(e) => set(d.department, 'label', e.target.value)}>
+              {Object.entries(LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+              {dec[d.department].label === 'does_not_apply' &&
+                <input style={{ marginTop: 6 }} placeholder="Reason (required)" value={dec[d.department].note} onChange={(e) => set(d.department, 'note', e.target.value)} />}</td></tr>))}
+      </tbody></table>
+      <p className="faint">Anything left as Cannot Determine stays open for investigation. It never defaults to Does Not Apply.</p>
+      <label>Required action (optional)</label><input value={action} onChange={(e) => setAction(e.target.value)} placeholder="What each owner must do" />
       {error && <p className="err">{error}</p>}
-    </div>
+      <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger" disabled={busy} onClick={() => go(false)}>Reject</button>
+        <button className="btn primary" disabled={busy} onClick={() => go(true)}>Approve obligation</button></div>
+    </Modal>
   )
+}
+
+function IngestDocModal({ onClose }: { onClose: () => void }) {
+  const { data: sources } = useApi('/sources')
+  const { data: docs } = useApi('/documents')
+  const { run, error, busy } = useAction()
+  const [sid, setSid] = useState('')
+  const [doc, setDoc] = useState('')
+  const [version, setVersion] = useState('')
+  const [res, setRes] = useState<any>(null)
+  const regs = (sources || []).filter((s: any) => s.kind !== 'advisory')
+  const go = () => run(async () => {
+    const name = doc.split('/').slice(1).join('/')
+    const t = await api.get(`/documents/docs/${encodeURIComponent(name)}/text`)
+    setRes(await api.post(`/sources/${sid}/versions`, { version: version || t.name, text: t.text }))
+    refreshAll()
+  })
+  if (res) return (
+    <Modal title="Summary of changes" sub={`${res.source} · version ${res.version}`} onClose={onClose}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0' }}>
+        <Badge kind="info">{res.changes.filter((c: any) => c.kind === 'changed').length} changed</Badge>
+        <Badge>{res.changes.filter((c: any) => c.kind === 'new').length} new</Badge>
+        <Badge kind="over">{res.removed.length} removed</Badge><Badge kind="dna">{res.unchanged} unchanged</Badge></div>
+      <div style={{ maxHeight: 340, overflow: 'auto' }}>
+        <table><thead><tr><th>Clause</th><th>Change</th><th>Departments involved</th></tr></thead><tbody>
+          {res.changes.map((c: any) => (
+            <tr key={c.obligation_id}><td><b className="mono">{c.ref}</b><div className="faint">{(c.new || '').slice(0, 120)}{(c.new || '').length > 120 ? '…' : ''}</div></td>
+              <td><Badge kind={c.kind === 'changed' ? 'info' : ''}>{c.kind}</Badge></td><td>{c.departments.join(', ')}</td></tr>))}
+          {res.removed.map((r: string) => <tr key={r}><td className="mono"><b>{r}</b></td><td><Badge kind="over">removed</Badge></td><td className="muted">no longer in the source</td></tr>)}
+        </tbody></table></div>
+      <p className="muted" style={{ marginTop: 8 }}>Each changed clause is now a candidate obligation. Review it to see the departments involved, who owns each, and record Applies, Does Not Apply or Cannot Determine.</p>
+      <div className="actions"><button className="btn primary" onClick={onClose}>Review candidates</button></div>
+    </Modal>)
+  return (
+    <Modal title="Ingest document" sub="Pick a source and one of your uploaded documents. PoliBridge compares it with the previous version and turns each changed clause into a candidate obligation." onClose={onClose}>
+      <label>Source it updates</label>
+      <select value={sid} onChange={(e) => setSid(e.target.value)}><option value="">Choose a source…</option>
+        {regs.map((s: any) => <option key={s.id} value={s.id}>{s.name} ({s.kind})</option>)}</select>
+      <label>Document</label>
+      <select value={doc} onChange={(e) => { setDoc(e.target.value); setVersion('') }}><option value="">Choose an uploaded document…</option>
+        {(docs || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}.{d.ext}</option>)}</select>
+      {docs && !docs.length && <p className="muted">No documents yet. Upload one on the Documents page first.</p>}
+      <label>Version label (optional)</label><input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="e.g. 2022" />
+      {error && <p className="err">{error}</p>}
+      <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={busy || !sid || !doc} onClick={go}>Compare and ingest</button></div>
+    </Modal>)
 }
 
 function IngestModal({ onClose }: { onClose: () => void }) {
@@ -78,7 +261,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
         cve: f.cve, product: f.product, affected_versions: f.versions.split(',').map((s) => s.trim()).filter(Boolean),
         cvss: f.cvss ? Number(f.cvss) : null, kev: f.kev, fixed_version: f.fixed || null, description: desc || null,
       })
-      refreshAll(); nav(`/advisories/${r.id}`)
+      refreshAll(); nav(`/acknowledgements/${r.id}`)
     })
     if (ok) onClose()
   }
@@ -129,7 +312,26 @@ export function AdvisoryDetail() {
   const [guid, setGuid] = useState<any>(null)
   const { run, error: aerr } = useAction()
   if (!o) return <Loading error={error} />
-  if (!o.estate) return <><div className="crumbs"><Link to="/advisories">Advisories</Link></div><h1>{o.title}</h1><p className="muted">This obligation has no per-asset applicability; it is tracked through its tasks.</p></>
+  if (!o.estate) return (
+    <>
+      <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / OBL-{String(o.id).padStart(4, '0')}</div>
+      <div className="badges" style={{ marginTop: 8 }}><Badge>{o.kind === 'policy' ? 'Policy clause' : 'Regulatory clause'}</Badge><Badge kind={o.status === 'candidate' ? 'cd' : 'info'}>{o.status}</Badge></div>
+      <h1>{o.title}</h1>
+      {o.previous_quotation && <div className="card" style={{ marginTop: 16 }}><h2>Previous wording</h2><p className="muted">{o.previous_quotation}</p></div>}
+      <div className="card" style={{ marginTop: 16 }}><h2>{o.previous_quotation ? 'Current wording' : 'Clause'}</h2><p>{o.quotation}</p>
+        <p className="faint" style={{ marginTop: 8 }}>Required action: {o.required_action || '—'}</p></div>
+      <div className="card" style={{ marginTop: 16 }}><h2>Departments involved</h2>
+        <p className="muted">Decided by Compliance or Legal. Cannot Determine stays open until someone decides.</p>
+        <table><thead><tr><th>Department</th><th>Owner</th><th>Why involved</th><th>Decision</th><th>Sign-off</th></tr></thead><tbody>
+          {(o.departments || []).map((d: any) => (
+            <tr key={d.department}><td><b>{d.department}</b></td><td>{d.owner || '—'}</td><td className="muted">{d.reason}</td>
+              <td><LabelBadge label={d.label} />{d.decided_by && <div className="faint">by {d.decided_by}</div>}{d.note && <div className="faint">{d.note}</div>}</td>
+              <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}</div></>
+                : o.status === 'candidate' ? <span className="muted">Awaiting Compliance / Legal</span>
+                : <button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}>Sign off</button>}</td></tr>))}
+          {!(o.departments || []).length && <tr><td colSpan={5} className="muted">No departments recorded.</td></tr>}</tbody></table>
+        {aerr && <p className="err">{aerr}</p>}</div>
+    </>)
   const a = o.advisory, est = o.estate
   const t = est.timings
   const g = est.gate
@@ -141,7 +343,7 @@ export function AdvisoryDetail() {
   return (
     <>
       <div className="head"><div>
-        <div className="crumbs"><Link to="/advisories">Advisories</Link> / ADV-{String(o.id).padStart(4, '0')}</div>
+        <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / ADV-{String(o.id).padStart(4, '0')}</div>
         <div className="badges" style={{ marginTop: 8 }}>{o.impact && <ImpactBadge impact={o.impact} />}<Badge kind="info">Security advisory · fast path</Badge></div>
         <h1>{a.cve} · {a.product}</h1>
         <p className="muted" style={{ maxWidth: 760 }}>Ingested automatically on {fmt(a.published_at, true)} and matched against every asset's component records. Advisories bypass the Compliance/Legal gate.</p>
@@ -170,22 +372,34 @@ export function AdvisoryDetail() {
           <div style={{ display: 'flex', gap: 6 }}>
             <Badge kind="applies">{est.counts.applies} Applies</Badge><Badge kind="cd">{est.counts.cannot_determine} Cannot Determine</Badge><Badge kind="dna">{est.counts.does_not_apply} Does Not Apply</Badge></div></div>
         <table>
-          <thead><tr><th>Asset</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
+          <thead><tr><th>Asset</th><th>Owner</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
           <tbody>{est.rows.map((r: any) => (
             <tr key={r.asset_id} className={r.state === 'cannot_determine' ? 'hl' : ''}>
               <td><b>{r.asset}</b><div className="faint">{r.tags}</div></td>
+              <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}
+                {r.owner && !r.owner_active && <div className="red" style={{ fontSize: 12 }}>left the organisation</div>}</td>
               <td><span className="mono">{r.component_record}</span>
                 {r.provenance && <div className="faint mono">{r.provenance}</div>}
                 {r.stale && <div className="red" style={{ fontSize: 12 }}>stale · over 30 days</div>}</td>
               <td><StateBadge state={r.state} />{r.state !== 'cannot_determine' &&
                 <div><button className="btn sm danger" onClick={() => override(r)}>Make more cautious</button></div>}</td>
               <td style={{ maxWidth: 260 }}>{r.basis}</td>
-              <td>{r.task_id ? <><Link to={`/tasks/${r.task_id}`} className="mono"><b>{r.task_ref}</b></Link>
+              <td>{r.task_id ? <><Link to={`/remediations/${r.task_id}`} className="mono"><b>{r.task_ref}</b></Link>
                 <div className={r.task_overdue ? 'red' : 'muted'} style={{ fontSize: 12.5 }}>{r.task_status}</div></> : <span className="muted">No task</span>}</td>
             </tr>))}</tbody>
         </table>
         {aerr && <p className="err">{aerr}</p>}
         <p className="faint" style={{ marginTop: 10 }}>Anyone may move an asset to a more cautious state with a reason. Moving it to Does Not Apply needs component-scoped evidence and an independent reviewer.</p>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Departments involved</h2>
+        <p className="muted">Who is accountable in each department and where each system stands for this advisory.</p>
+        <table><thead><tr><th>Department</th><th>Department head</th><th>Systems · owner · state</th></tr></thead><tbody>
+          {(o.advisory_departments || []).map((d: any) => (
+            <tr key={d.department}><td><b>{d.department}</b></td><td>{d.head || '—'}</td>
+              <td>{d.systems.map((s: any) => <div key={s.name} style={{ margin: '2px 0' }}><StateBadge state={s.state} /> {s.name} <span className="faint">· owner </span>
+                <span style={s.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{s.owner || 'none'}</span></div>)}</td></tr>))}</tbody></table>
       </div>
 
       <div className="gate">

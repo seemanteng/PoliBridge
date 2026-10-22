@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from ..clock import clock
-from ..models import Source, SourceVersion, Advisory, Obligation, Person
+from ..models import Source, SourceVersion, Advisory, Obligation, Person, BusinessUnit
 from . import audit
 from .assessment import assess_obligation
 
@@ -40,6 +40,39 @@ def _clauses(text: str) -> dict[str, str]:
     return out
 
 
+# Which departments a clause is likely to involve, by the words it uses. This only *suggests* scope with the
+# reason shown; Compliance/Legal decide the label for each department (applies / does not apply / cannot determine).
+DEPT_KEYWORDS = {
+    "Information Security": ["information security", "encrypt", "multi-factor", "authenticat", "access control", "penetration",
+                             "vulnerab", "incident", "security event", "intrusion", "safeguard", "secure development", "systems"],
+    "Risk & Compliance": ["risk assessment", "risk", "compliance", "periodically", "written", "evaluate", "program"],
+    "Legal": ["contract", "service provider", "affiliate", "notify", "notification", "law", "regulation", "breach"],
+    "Internal Audit": ["regularly test", "monitor", "audit", "effectiveness", "review"],
+    "Executive Office": ["board of directors", "governing body", "qualified individual", "senior member", "designate"],
+    "Consumer Services": ["customer information", "disposal", "dispose", "retention", "personnel", "training", "applications"],
+}
+
+
+def suggest_departments(db, text: str) -> list[dict]:
+    low = text.lower()
+    units = {b.name: b for b in db.scalars(select(BusinessUnit))}
+    found = []
+    for dept, words in DEPT_KEYWORDS.items():
+        hits = [w for w in words if w in low]
+        if hits and dept in units:
+            found.append((len(hits), dept, hits))
+    found.sort(key=lambda x: -x[0])
+    if not found and "Risk & Compliance" in units:
+        found = [(0, "Risk & Compliance", [])]
+    out = []
+    for _, dept, hits in found[:4]:
+        head = db.get(Person, units[dept].head_id) if units[dept].head_id else None
+        out.append({"department": dept, "owner": head.name if head else None,
+                    "reason": ("mentions: " + ", ".join(hits[:4])) if hits else "no specific keyword; Compliance triages",
+                    "label": "cannot_determine", "decided_by": None, "note": None})
+    return out
+
+
 def ingest_source_version(db, source: Source, version: str, text: str) -> dict:
     """Compare with the previous version; changed clauses become *candidate* obligations
     with exact quotations. Unchanged sources are recorded for the quarterly summary."""
@@ -49,10 +82,12 @@ def ingest_source_version(db, source: Source, version: str, text: str) -> dict:
     old = _clauses(prev.text) if prev else {}
     new = _clauses(text)
     changed = {ref: q for ref, q in new.items() if old.get(ref) != q}
+    removed = [ref for ref in old if ref not in new]
     candidates = []
     for ref, quote in changed.items():
         ob = Obligation(kind="regulatory" if source.kind != "policy" else "policy",
                         title=f"{source.name} {ref}", source_id=source.id, source_ref=ref, quotation=quote,
+                        previous_quotation=old.get(ref), departments=suggest_departments(db, quote),
                         status="candidate", created_at=clock.now(),
                         required_action="To be confirmed by Compliance/Legal")
         db.add(ob)
@@ -61,16 +96,37 @@ def ingest_source_version(db, source: Source, version: str, text: str) -> dict:
     for ob in candidates:
         audit.log(db, "system", "obligation", ob.id, "candidate_created", ref=ob.source_ref)
     return {"source": source.name, "version": version, "changed": len(changed), "unchanged": len(new) - len(changed),
-            "candidates": [o.id for o in candidates]}
+            "removed": removed, "candidates": [o.id for o in candidates],
+            "changes": [{"obligation_id": o.id, "ref": o.source_ref, "kind": "changed" if o.previous_quotation else "new",
+                         "old": o.previous_quotation, "new": o.quotation,
+                         "departments": [d["department"] for d in o.departments or []]} for o in candidates]}
+
+
+LABELS = ("applies", "does_not_apply", "cannot_determine")
 
 
 def decide_candidate(db, ob: Obligation, approver: Person, approve: bool, applicability: str | None = None,
-                     required_action: str | None = None):
+                     required_action: str | None = None, departments: list[dict] | None = None):
     """Materiality and applicability of regulatory obligations is a human decision."""
     if approver.role not in ("compliance", "legal"):
         raise PermissionError("only Compliance or Legal can decide regulatory candidates")
     if ob.status != "candidate":
         raise ValueError("not a candidate")
+    scope = [dict(d) for d in (ob.departments or [])]
+    for dec in departments or []:
+        row = next((d for d in scope if d["department"] == dec.get("department")), None)
+        if row is None:
+            raise ValueError(f"{dec.get('department')} is not a department involved in this clause")
+        if dec.get("label") not in LABELS:
+            raise ValueError(f"label for {row['department']} must be one of {', '.join(LABELS)}")
+        if dec["label"] == "does_not_apply" and not (dec.get("note") or "").strip():
+            raise ValueError(f"A5: Does Not Apply for {row['department']} needs a recorded reason")
+        row.update(label=dec["label"], note=(dec.get("note") or None), decided_by=approver.name)
+    if departments:
+        ob.departments = scope
+        labels = {d["label"] for d in scope}
+        applicability = applicability or ("applies" if "applies" in labels else
+                                          "cannot_determine" if "cannot_determine" in labels else "does_not_apply")
     ob.approved_by_id = approver.id
     ob.status = "open" if approve else "rejected"
     ob.applicability_decision = applicability
@@ -78,6 +134,23 @@ def decide_candidate(db, ob: Obligation, approver: Person, approve: bool, applic
         ob.required_action = required_action
     audit.log(db, approver.directory_id, "obligation", ob.id, "approved" if approve else "rejected",
               applicability=applicability)
+
+
+def signoff_department(db, ob: Obligation, person: Person, department: str):
+    """The department's owner signs off that they have seen and accepted the label on an approved clause."""
+    if ob.status not in ("open", "closed"):
+        raise ValueError("a clause can be signed off only after Compliance or Legal approve it")
+    scope = [dict(d) for d in (ob.departments or [])]
+    row = next((d for d in scope if d["department"] == department), None)
+    if row is None:
+        raise ValueError(f"{department} is not involved in this clause")
+    if person.name != row.get("owner"):
+        raise PermissionError(f"only {row.get('owner')}, who owns {department}, can sign off for it")
+    if row.get("signed_at"):
+        raise ValueError(f"{department} has already signed off")
+    row.update(signed_by=person.name, signed_at=clock.now().isoformat())
+    ob.departments = scope
+    audit.log(db, person.directory_id, "obligation", ob.id, "signed_off", department=department, label=row.get("label"))
 
 
 def quarterly_summary(db) -> dict:

@@ -1,15 +1,80 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { fmt, useApi } from '../api'
-import { Badge, Loading } from '../ui'
+import { api, fmt, getUser, refreshAll, useApi } from '../api'
+import { Badge, Loading, Modal, useAction } from '../ui'
 
 const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance' }
 
+const METHODS: [string, string][] = [['authenticated_scan', 'Authenticated scan'], ['direct_version_check', 'Direct version check'], ['sbom', 'SBOM'],
+  ['sca', 'Software-composition analysis'], ['attestation', 'Attestation'], ['certificate_check', 'Certificate check']]
+const TYPES: [string, string, string][] = [
+  ['monitoring', 'Monitoring', 'A control you rely on is in effect, e.g. traffic inspection with a certificate that expires.'],
+  ['ownership', 'Ownership', 'A named person owns a system. Lapses when the attestation does.'],
+  ['remediation', 'Remediation', 'A fix was applied. Normally created through Remediation and Evidence review.'],
+  ['applicability', 'Applicability', 'A system is affected, or cannot yet be determined. Does Not Apply needs reviewed evidence, so it is blocked here.']]
+const iso = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16)
+
+// Dates default from the server's clock, so the form waits for it
+function NewClaim({ onClose }: { onClose: () => void }) {
+  const clock = useApi('/clock')
+  if (!clock.data) return <Modal title="New claim" onClose={onClose}><Loading error={clock.error} /></Modal>
+  return <NewClaimForm now={new Date(clock.data.now)} onClose={onClose} />
+}
+
+function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
+  const assets = useApi('/assets'), people = useApi('/people')
+  const { run, error, busy } = useAction()
+  const [f, setF] = useState({ type: 'monitoring', asset: '', statement: '', value: '', component: '', method: 'certificate_check', scope: '',
+    evidence: iso(now), expiry: iso(new Date(now.getTime() + 90 * 864e5)), owner: '' })
+  const set = (k: string, v: string) => setF({ ...f, [k]: v })
+  const t = TYPES.find((x) => x[0] === f.type)!
+  const go = async () => {
+    const ok = await run(async () => {
+      await api.post('/claims', { claim_type: f.type, asset_id: Number(f.asset), statement: f.statement, value: f.value || null,
+        component: f.component || null, verification_method: f.method, evidence_scope: f.scope.split(',').map((s) => s.trim()).filter(Boolean),
+        evidence_ts: f.evidence, expiry: f.expiry, owner_id: f.owner ? Number(f.owner) : null })
+      refreshAll()
+    })
+    if (ok) onClose()
+  }
+  return (
+    <Modal title="New claim" sub="A claim is a statement someone stands behind, with evidence that says what it examined and a date it lapses." onClose={onClose}>
+      <label>Type</label>
+      <select value={f.type} onChange={(e) => set('type', e.target.value)}>{TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+      <p className="faint">{t[2]}</p>
+      <label>System</label>
+      <select value={f.asset} onChange={(e) => set('asset', e.target.value)}><option value="">Choose a system…</option>
+        {(assets.data || []).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+      <label>Statement</label><input value={f.statement} onChange={(e) => set('statement', e.target.value)} placeholder="e.g. ACIS outbound traffic is inspected" />
+      {f.type === 'applicability' && <><label>Value</label>
+        <select value={f.value} onChange={(e) => set('value', e.target.value)}><option value="">Choose…</option><option value="applies">Applies</option>
+          <option value="cannot_determine">Cannot Determine</option><option value="does_not_apply">Does Not Apply</option></select></>}
+      <label>Component (optional)</label><input value={f.component} onChange={(e) => set('component', e.target.value)} placeholder="e.g. struts2-core" />
+      <label>How it was verified</label>
+      <select value={f.method} onChange={(e) => set('method', e.target.value)}>{METHODS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+      <label>What the evidence examined (comma separated)</label><input value={f.scope} onChange={(e) => set('scope', e.target.value)} placeholder="e.g. /opt/acis/**, cert:SSLV-02" />
+      <div className="grid g2" style={{ marginTop: 0 }}>
+        <div><label>Evidence date</label><input type="datetime-local" value={f.evidence} onChange={(e) => set('evidence', e.target.value)} /></div>
+        <div><label>Lapses on</label><input type="datetime-local" value={f.expiry} onChange={(e) => set('expiry', e.target.value)} /></div></div>
+      <label>Told when it lapses</label>
+      <select value={f.owner} onChange={(e) => set('owner', e.target.value)}><option value="">Me ({getUser()})</option>
+        {(people.data || []).filter((p: any) => p.active).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+      {error && <p className="err">{error}</p>}
+      <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={busy || !f.asset || !f.statement} onClick={go}>Add claim</button></div>
+    </Modal>
+  )
+}
+
 export function ClaimList() {
   const { data: cs, error } = useApi('/claims')
+  const [adding, setAdding] = useState(false)
   return (
     <>
-      <h1>Claims</h1>
-      <p className="muted">Every status PoliBridge holds is a claim with scoped evidence and an expiry. Lapsed claims revert to Cannot Determine.</p>
+      <div className="head"><div><h1>Claims</h1>
+        <p className="muted">Every status PoliBridge holds is a claim with scoped evidence and an expiry. Lapsed claims revert to Cannot Determine.</p></div>
+        <button className="btn primary" onClick={() => setAdding(true)}>New claim</button></div>
+      {adding && <NewClaim onClose={() => setAdding(false)} />}
       <div className="card" style={{ marginTop: 16 }}>
         {!cs ? <Loading error={error} /> : (
           <table><thead><tr><th>Claim</th><th>Type</th><th>Asset</th><th>Status</th><th>Expiry</th></tr></thead>

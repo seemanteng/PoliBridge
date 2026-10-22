@@ -14,6 +14,13 @@ from ..services import (registry, intake, nvd, rag, assessment, assignment, clos
 
 router = APIRouter(prefix="/api")
 
+EDITORS = {"ciso", "bu_head", "manager", "risk_owner", "senior_mgmt", "executive", "compliance", "cco"}
+
+
+def require_editor(me):
+    if me.role not in EDITORS:
+        raise HTTPException(403, "only a manager, business-unit head, CISO, risk owner, compliance or executive can edit the registry")
+
 
 def ser(o):
     if o is None:
@@ -79,17 +86,10 @@ class Advance(BaseModel):
 
 @router.post("/clock/advance")
 def advance(body: Advance, db=Depends(get_db)):
+    """Development and test hook; the UI no longer offers it. The jump lasts until the server restarts, so it can
+    never leave a live demo on a frozen clock."""
     clock.advance(hours=body.hours, days=body.days)
-    clock.save()
-    r = assurance.sweep(db)
-    return {"now": clock.now().isoformat(), **r}
-
-
-@router.post("/clock/reset")
-def reset_clock():
-    clock.unfreeze()
-    clock.save()
-    return {"now": clock.now().isoformat()}
+    return {"now": clock.now().isoformat(), **assurance.sweep(db)}
 
 
 @router.post("/sweep")
@@ -98,22 +98,10 @@ def sweep(db=Depends(get_db)):
 
 
 @router.post("/demo/reset")
-def demo_reset(mode: str = "replay"):
-    """replay: the full March 2017 storyline. baseline: the organisation on 8 Mar, before the advisory.
-    Both are synthetic."""
-    from ..db import Base, engine, SessionLocal
+def demo_reset(mode: str = "baseline"):
+    """baseline: today's organisation, nothing pre-played. replay: the 2017 storyline on a frozen clock (development)."""
     from ..seed import replay
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    with SessionLocal() as s:
-        replay.load_baseline(s)
-        if mode == "replay":
-            out = replay.run_storyline(s)
-        else:
-            clock.set(datetime(2017, 3, 8, 9, 0))
-            clock.save()
-            out = {"now": clock.now().isoformat()}
-    return {"mode": mode, **out}
+    return replay.reset_demo(mode)
 
 
 # ---------- registry (C1) ----------
@@ -179,7 +167,12 @@ class Jml(BaseModel):
 
 @router.post("/people/{person_id}/jml")
 def jml(person_id: int, body: Jml, db=Depends(get_db), me=Depends(actor)):
+    require_editor(me)
+    if body.event not in ("leaver", "mover", "joiner"):
+        raise HTTPException(400, "event must be leaver, mover or joiner")
     p = one(db, M.Person, person_id)
+    if body.event == "leaver" and not p.active:
+        raise HTTPException(400, f"{p.name} has already left")
     registry.joiner_mover_leaver(db, p, body.event, actor=me.directory_id)
     db.commit()
     return ser(p)
@@ -221,6 +214,54 @@ def claims(claim_type: str | None = None, status: str | None = None, db=Depends(
         d["dependents"] = sers(db.scalars(select(M.Dependency).where(M.Dependency.claim_id == c.id)))
         out.append(d)
     return out
+
+
+class ClaimIn(BaseModel):
+    claim_type: str  # ownership | monitoring | applicability | remediation
+    asset_id: int
+    statement: str
+    value: str | None = None
+    component: str | None = None
+    verification_method: str
+    evidence_scope: list[str] = []
+    evidence_ts: datetime
+    expiry: datetime
+    owner_id: int | None = None  # told when the claim lapses
+
+
+CLAIM_METHODS = ("authenticated_scan", "direct_version_check", "sbom", "sca", "attestation", "certificate_check")
+
+
+@router.post("/claims")
+def create_claim_manually(body: ClaimIn, db=Depends(get_db), me=Depends(actor)):
+    """A claim someone asserts by hand. Every claim needs a statement, scoped evidence, a method and an expiry (F1)."""
+    now = clock.now()
+    if body.claim_type not in ("ownership", "monitoring", "applicability", "remediation"):
+        raise HTTPException(400, "claim type must be ownership, monitoring, applicability or remediation")
+    if not body.statement.strip():
+        raise HTTPException(400, "write the statement the claim makes")
+    if body.verification_method not in CLAIM_METHODS:
+        raise HTTPException(400, f"verification method must be one of {', '.join(CLAIM_METHODS)}")
+    if not [s for s in body.evidence_scope if s.strip()]:
+        raise HTTPException(400, "E1: record what the evidence examined (host, directory or component)")
+    if body.expiry <= now:
+        raise HTTPException(400, "F1: the expiry must be in the future")
+    if body.evidence_ts > now:
+        raise HTTPException(400, "E2: evidence cannot be dated in the future")
+    if body.expiry <= body.evidence_ts:
+        raise HTTPException(400, "F1: the expiry must be after the evidence timestamp")
+    if body.claim_type == "applicability" and body.value == "does_not_apply":
+        raise HTTPException(400, "A2/A5: Does Not Apply cannot be asserted directly. Submit component-scoped evidence on the "
+                                 "remediation task so an independent reviewer approves it")
+    asset = one(db, M.Asset, body.asset_id)
+    owner_id = body.owner_id or me.id
+    scope = [s.strip() for s in body.evidence_scope if s.strip()]
+    c = common.create_claim(db, actor=me.directory_id, claim_type=body.claim_type, asset_id=asset.id,
+                            statement=body.statement.strip(), value=body.value or "asserted", component=body.component or None,
+                            evidence_scope=scope, verification_method=body.verification_method, evidence_ts=body.evidence_ts,
+                            submitter_id=me.id, owner_id=owner_id, expiry=body.expiry)
+    db.commit()
+    return ser(c)
 
 
 class Monitoring(BaseModel):
@@ -332,6 +373,18 @@ def _obligation_detail(db, oid: int):
     d["dispositions"] = closure.disposition_summary(db, o)
     if o.advisory_id:
         d["estate"] = views.estate(db, o)
+        # which departments are involved and who is accountable in each
+        depts: dict[str, dict] = {}
+        for r in d["estate"]["rows"]:
+            a = db.get(M.Asset, r["asset_id"])
+            r["owner"] = a.owner.name if a.owner else None
+            r["owner_active"] = bool(a.owner and a.owner.active)
+            bu = a.business_unit
+            head = db.get(M.Person, bu.head_id) if bu and bu.head_id else None
+            row = depts.setdefault(bu.name if bu else "Unassigned", {"department": bu.name if bu else "Unassigned",
+                                                                      "head": head.name if head else None, "systems": []})
+            row["systems"].append({"name": a.name, "owner": r["owner"], "owner_active": r["owner_active"], "state": r["state"]})
+        d["advisory_departments"] = list(depts.values())
     return d
 
 
@@ -342,16 +395,24 @@ def get_obligation(oid: int, db=Depends(get_db)):
     return r
 
 
+class DeptDecision(BaseModel):
+    department: str
+    label: str
+    note: str | None = None
+
+
 class Decision(BaseModel):
     approve: bool
     applicability: str | None = None
     required_action: str | None = None
+    departments: list[DeptDecision] | None = None
 
 
 @router.post("/obligations/{oid}/decide")
 def decide(oid: int, body: Decision, db=Depends(get_db), me=Depends(actor)):
     guarded(lambda: intake.decide_candidate(db, one(db, M.Obligation, oid), me, body.approve,
-                                            body.applicability, body.required_action))(db)
+                                            body.applicability, body.required_action,
+                                            [d.model_dump() for d in body.departments] if body.departments else None))(db)
     return ser(db.get(M.Obligation, oid))
 
 
@@ -406,7 +467,13 @@ def tasks(status: str | None = None, owner: str | None = None, include_tests: bo
     if owner:
         p = common.person_by_directory_id(db, owner)
         q = q.where(M.Task.owner_id == (p.id if p else -1))
-    return [task_view(db, t) for t in db.scalars(q)]
+    out = []
+    for t in db.scalars(q):
+        d = task_view(db, t)
+        tl = views.task_timeline(db, t)
+        d["latest_update"] = tl[-1] if tl else None
+        out.append(d)
+    return out
 
 
 @router.get("/tasks/{tid}")

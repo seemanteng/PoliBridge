@@ -8,18 +8,21 @@ All data is synthetic; CMDB, directory, scanner and ticketing integrations are r
 
 ```bash
 # backend (Python 3.11+)
-cd backend && python3 -m venv .venv && .venv/bin/pip install fastapi "uvicorn[standard]" sqlalchemy pyyaml pytest httpx openai python-dotenv
+cd backend && python3 -m venv .venv && .venv/bin/pip install fastapi "uvicorn[standard]" sqlalchemy pyyaml pytest httpx openai python-dotenv pypdf
 .venv/bin/uvicorn app.main:app --port 8000
 
 # frontend (separate terminal)
 cd frontend && npm install && npm run dev      # http://localhost:5180
 ```
 
-On first start the database is seeded with the **March 2017 replay** (the storyline in `mockups/PoliBridge.pdf`).
-The sidebar has a simulated clock (+1h/+1d/+7d/+30d: escalation and expiry are time-driven), a **Replay** /
-**Baseline** reset (Baseline = 8 Mar, before the advisory, so you can ingest it yourself), and a user switcher
-(the `X-User` header stands in for SSO). Try: switch to *Ama Mensah* (reviewer), or ingest the advisory on Baseline
-and advance the clock past 24h/48h.
+On first start the database is seeded with the organisation as of today (staff, departments, six systems, approved
+sources) and nothing pre-played: the clock is real time. Ingest an advisory on **Acknowledgements** (**Fetch from NVD** pulls
+CVE-2017-5638 live) to see each system get a label, then sign off as the owners using the user switcher in the sidebar.
+`npm run reset` returns the data to that starting point. Escalation and document reminders are checked every minute; use
+**Escalate** on the Alerts page to show escalation without waiting 24 hours. Auth is the `X-User` header, standing in for SSO.
+
+The March 2017 storyline is still in `backend/app/seed/replay.py` and runs on a frozen clock for tests and development
+(`POST /api/demo/reset?mode=replay`); the UI does not offer it.
 
 Optional LLM guidance: copy `backend/.env.example` to `backend/.env` and add `OPENAI_API_KEY`.
 Without it a deterministic stub is used. Grounding is verified in code after generation, so a model that

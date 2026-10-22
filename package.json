@@ -5,7 +5,8 @@
     "dev": "concurrently -k -n api,web -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && .venv/bin/uvicorn app.main:app --port 8000",
     "dev:frontend": "wait-on -t 60000 http-get://127.0.0.1:8000/api/health && npm --prefix frontend run dev",
-    "install:all": "npm install && npm --prefix frontend install"
+    "install:all": "npm install && npm --prefix frontend install",
+    "reset": "cd backend && .venv/bin/python -c \"from app.seed import replay; print(replay.reset_demo())\""
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

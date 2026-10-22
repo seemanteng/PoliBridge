@@ -100,14 +100,33 @@ def _type_specific(db, c: Claim):
             reroute_task(db, t, "ownership attestation expired")
 
 
+def remind_documents(db) -> list[str]:
+    """Overdue document-update reminders notify the owner once per cycle and raise a finding."""
+    from datetime import timedelta
+    from ..models import DocumentReminder
+    now, due_docs = clock.now(), []
+    for r in db.scalars(select(DocumentReminder)):
+        due = r.last_updated_at + timedelta(days=r.every_days)
+        if now >= due and (r.last_notified_at is None or r.last_notified_at < due):
+            owner = db.get(Person, r.owner_id)
+            raise_finding(db, "document_update_due", "Medium", f"Updated '{r.document}' has not been uploaded",
+                          f"Due {due:%d %b %Y} on a {r.every_days}-day cycle.", assigned_to=owner)
+            notify(db, person=owner, kind="document_reminder",
+                   message=f"Please upload an updated version of '{r.document}' (due {due:%d %b %Y}).")
+            r.last_notified_at = now
+            due_docs.append(r.document)
+    return due_docs
+
+
 def sweep(db) -> dict:
     """One pass of everything time-driven. Call after advancing the clock."""
     tick_all(db)
     expired = expire_claims(db)
     tick_all(db)
     evaluate_canaries(db)
+    reminders = remind_documents(db)
     db.commit()
-    return {"expired_claims": [c.id for c in expired]}
+    return {"expired_claims": [c.id for c in expired], "documents_due": reminders}
 
 
 # ---- canaries (F3) ----
@@ -213,8 +232,9 @@ def oversight_summary(db) -> dict:
             "canary_failures": [f.subject for f in db.scalars(select(Finding).where(Finding.kind == "canary_failure"))]}
 
 
-def audit_timeline(db, entity: str | None = None, entity_id: int | None = None, limit=500):
-    q = select(AuditEvent).order_by(AuditEvent.id)
+def audit_timeline(db, entity: str | None = None, entity_id: int | None = None, limit=2000):
+    """Newest first."""
+    q = select(AuditEvent).order_by(AuditEvent.id.desc())
     if entity:
         q = q.where(AuditEvent.entity == entity)
     if entity_id is not None:
