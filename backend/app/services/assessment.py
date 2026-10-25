@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from ..clock import clock
 from ..config import TIMINGS
-from ..models import Asset, Advisory, Obligation, Claim, Task, Person, Dependency
+from ..models import Asset, Advisory, Obligation, Claim, Task, Person, Dependency, Guidance
 from ..rules import applicability as A, impact as I
 from . import audit
 from .common import create_claim, add_dependency, raise_finding, first_with_role
@@ -76,15 +76,21 @@ def _sync_tasks(db, obligation, adv, asset, claim):
         if t.kind != want:
             t.status, t.disposition, t.closed_at = "closed", "superseded", clock.now()
             audit.log(db, "system", "task", t.id, "closed_superseded", new_label=claim.value)
+            for g in db.scalars(select(Guidance).where(Guidance.obligation_id == obligation.id, Guidance.asset_id == asset.id,
+                                                       Guidance.status.in_(("released", "withheld")))):
+                g.status = "superseded"  # it described the system as it was recorded before
     if want and not any(t.kind == want and t.status in OPEN_STATES for t in open_tasks):
         info = _classify(adv, asset, regulatory=obligation.kind == "regulatory")
         if info["human_review"]:
             raise_finding(db, "impact_review", "Medium", f"{asset.name}: {adv.cve}",
                           f"Unknown criteria {info['unknown']}; classified conservatively",
                           assigned_to=first_with_role(db, "ciso"))
-        create_task(db, obligation=obligation, asset=asset, kind=want, impact=info["impact"],
-                    component=adv.product, claim=claim, reviewers=info["required_reviewers"],
-                    is_test=obligation.is_test)
+        t = create_task(db, obligation=obligation, asset=asset, kind=want, impact=info["impact"],
+                        component=adv.product, claim=claim, reviewers=info["required_reviewers"],
+                        is_test=obligation.is_test)
+        if not obligation.is_test:  # the owner gets advice about this system as it is recorded now (C1)
+            from . import rag
+            rag.guidance_for_task(db, obligation, t)
 
 
 def override_applicability(db, obligation: Obligation, asset: Asset, new_label: str, reason: str,

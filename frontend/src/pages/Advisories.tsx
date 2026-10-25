@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, StateBadge, useAction } from '../ui'
 import { has } from '../filterUtils'
+import { NewVersionModal } from './documents/NewVersion'
+import { GuidanceText, WriteGuidanceModal } from './documents/Guidance'
 
 const LABEL: Record<string, string> = { applies: 'Applies', does_not_apply: 'Does Not Apply', cannot_determine: 'Cannot Determine' }
 const LABEL_KIND: Record<string, string> = { applies: 'lbl-applies', does_not_apply: 'lbl-dna', cannot_determine: 'lbl-cd' }
@@ -45,8 +47,8 @@ function AddNewModal({ onClose, onPick }: { onClose: () => void; onPick: (k: 'ad
       <b>{title}</b><div className="muted" style={{ marginTop: 2 }}>{text}</div></button>)
   return (
     <Modal title="What is new?" sub="Either one creates items below for the affected systems or departments." onClose={onClose}>
-      {opt('advisory', 'A security advisory', 'A vulnerability notice such as a CVE. Fetch the details from NVD, and every system is matched and labelled at once.')}
-      {opt('document', 'A document', 'A regulation or policy that changed. Pick an uploaded file and PoliBridge shows which clauses are new or different.')}
+      {opt('advisory', 'A security advisory', 'Advisories from approved feeds arrive on their own. Use this for one that reached you another way: fetch it from NVD and every system is matched at once.')}
+      {opt('document', 'A new version of a source', 'A regulation, policy or contract that changed. PoliBridge fingerprints the file and shows which clauses are new, changed, renumbered or removed.')}
     </Modal>
   )
 }
@@ -78,8 +80,8 @@ export function AdvisoryList() {
       {r.kind === 'Advisory' && <td>{r.impact ? <ImpactBadge impact={r.impact} short /> : <span className="faint">—</span>}</td>}
       <td><LabelBadge label={r.label} /></td>
       <td>{r.status === 'signed' ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{r.signed_by} · {fmt(r.signed_at)}{r.entered_by && <> · entered by {r.entered_by}</>}</div></>
-        : r.status === 'overdue' ? <Badge kind="over">Overdue</Badge>
-        : r.status === 'pending' ? <Badge kind="cd">Waiting</Badge>
+        : r.status === 'overdue' ? <><Badge kind="over">Overdue</Badge>{r.escalated_to && <div className="faint">escalated to {r.escalated_to}</div>}</>
+        : r.status === 'pending' ? <><Badge kind="cd">Waiting</Badge>{r.due && r.kind !== 'Advisory' && <div className="faint">due {fmt(r.due)}</div>}</>
         : <span className="muted">Nothing to do</span>}</td>
       <td style={{ whiteSpace: 'nowrap' }}>{(r.status === 'pending' || r.status === 'overdue') && <button className="btn sm primary" onClick={() => sign(r)}>Sign off</button>}</td>
     </tr>)
@@ -143,7 +145,7 @@ export function AdvisoryList() {
 
       {adding === 'choose' && <AddNewModal onClose={() => setAdding(null)} onPick={setAdding} />}
       {adding === 'advisory' && <IngestModal onClose={() => setAdding(null)} />}
-      {adding === 'document' && <IngestDocModal onClose={() => setAdding(null)} />}
+      {adding === 'document' && <NewVersionModal onClose={() => setAdding(null)} />}
       {rev && <ReviewModal o={rev} onClose={() => setRev(null)} />}
     </>
   )
@@ -184,53 +186,6 @@ function ReviewModal({ o, onClose }: { o: any; onClose: () => void }) {
   )
 }
 
-function IngestDocModal({ onClose }: { onClose: () => void }) {
-  const { data: sources } = useApi('/sources')
-  const { data: docs } = useApi('/documents')
-  const { run, error, busy } = useAction()
-  const [sid, setSid] = useState('')
-  const [doc, setDoc] = useState('')
-  const [version, setVersion] = useState('')
-  const [res, setRes] = useState<any>(null)
-  const regs = (sources || []).filter((s: any) => s.kind !== 'advisory')
-  const go = () => run(async () => {
-    const name = doc.split('/').slice(1).join('/')
-    const t = await api.get(`/documents/docs/${encodeURIComponent(name)}/text`)
-    setRes(await api.post(`/sources/${sid}/versions`, { version: version || t.name, text: t.text }))
-    refreshAll()
-  })
-  if (res) return (
-    <Modal title="Summary of changes" sub={`${res.source} · version ${res.version}`} onClose={onClose}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0' }}>
-        <Badge kind="info">{res.changes.filter((c: any) => c.kind === 'changed').length} changed</Badge>
-        <Badge>{res.changes.filter((c: any) => c.kind === 'new').length} new</Badge>
-        <Badge kind="over">{res.removed.length} removed</Badge><Badge>{res.unchanged} unchanged</Badge></div>
-      <div style={{ maxHeight: 340, overflow: 'auto' }}>
-        <table><thead><tr><th>Clause</th><th>Change</th><th>Departments involved</th></tr></thead><tbody>
-          {res.changes.map((c: any) => (
-            <tr key={c.obligation_id}><td><b className="mono">{c.ref}</b><div className="faint">{(c.new || '').slice(0, 120)}{(c.new || '').length > 120 ? '…' : ''}</div></td>
-              <td><Badge kind={c.kind === 'changed' ? 'info' : ''}>{c.kind}</Badge></td><td>{c.departments.join(', ')}</td></tr>))}
-          {res.removed.map((r: string) => <tr key={r}><td className="mono"><b>{r}</b></td><td><Badge kind="over">removed</Badge></td><td className="muted">no longer in the source</td></tr>)}
-        </tbody></table></div>
-      <p className="muted" style={{ marginTop: 8 }}>Each changed clause is now a candidate obligation. Review it to see the departments involved, who owns each, and record Applies, Does Not Apply or Cannot Determine.</p>
-      <div className="actions"><button className="btn primary" onClick={onClose}>Review candidates</button></div>
-    </Modal>)
-  return (
-    <Modal title="Ingest document" sub="Pick a source and one of your uploaded documents. PoliBridge compares it with the previous version and turns each changed clause into a candidate obligation." onClose={onClose}>
-      <label>Source it updates</label>
-      <select value={sid} onChange={(e) => setSid(e.target.value)}><option value="">Choose a source…</option>
-        {regs.map((s: any) => <option key={s.id} value={s.id}>{s.name} ({s.kind})</option>)}</select>
-      <label>Document</label>
-      <select value={doc} onChange={(e) => { setDoc(e.target.value); setVersion('') }}><option value="">Choose an uploaded document…</option>
-        {(docs || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}.{d.ext}</option>)}</select>
-      {docs && !docs.length && <p className="muted">No documents yet. Upload one on the Documents page first.</p>}
-      <label>Version label (optional)</label><input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="e.g. 2022" />
-      {error && <p className="err">{error}</p>}
-      <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={busy || !sid || !doc} onClick={go}>Compare and ingest</button></div>
-    </Modal>)
-}
-
 function IngestModal({ onClose }: { onClose: () => void }) {
   const nav = useNavigate()
   const { run, error, busy } = useAction()
@@ -240,6 +195,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
       const r = await api.post('/advisories', {
         cve: f.cve, product: f.product, affected_versions: f.versions.split(',').map((s) => s.trim()).filter(Boolean),
         cvss: f.cvss ? Number(f.cvss) : null, kev: f.kev, fixed_version: f.fixed || null, description: desc || null,
+        published_at: published || null,
       })
       refreshAll(); nav(`/acknowledgements/${r.id}`)
     })
@@ -248,6 +204,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
   const set = (k: string, v: any) => setF({ ...f, [k]: v })
   const [cands, setCands] = useState<any[]>([])
   const [desc, setDesc] = useState('')
+  const [published, setPublished] = useState('')
   const [note, setNote] = useState('')
   const pick = (c: any) => setF((p) => ({ ...p, product: c.inventory_name || c.product, versions: c.versions.join(', '), fixed: c.fixed_version || '' }))
   const fetchNvd = async () => {
@@ -256,6 +213,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
       const r = await api.get(`/advisories/lookup?cve=${encodeURIComponent(f.cve.trim())}`)
       setCands(r.candidates)
       setDesc(r.description || '')
+      setPublished(r.published || '')
       const c = r.candidates.find((x: any) => x.inventory_name) || r.candidates[0]
       setF((p) => ({ ...p, cve: r.cve, cvss: r.cvss == null ? '' : String(r.cvss), kev: !!r.kev,
         ...(c ? { product: c.inventory_name || c.product, versions: c.versions.join(', '), fixed: c.fixed_version || '' } : {}) }))
@@ -264,7 +222,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
     })
   }
   return (
-    <Modal title="Ingest advisory" sub="Fetch real data from NVD and CISA KEV, or type it in. It is matched against every asset at once." onClose={onClose}>
+    <Modal title="Ingest advisory" sub="Fetch real data from NVD and CISA KEV, or type it in. It is matched against every asset at once. If an approved feed already delivered this CVE, it is merged into the same obligation." onClose={onClose}>
       <label>CVE</label>
       <div style={{ display: 'flex', gap: 8 }}><input value={f.cve} onChange={(e) => set('cve', e.target.value)} />
         <button className="btn" disabled={busy} onClick={fetchNvd}>Fetch from NVD</button></div>
@@ -311,6 +269,7 @@ export function AdvisoryDetail() {
   const { id } = useParams()
   const { data: o, error } = useApi(`/obligations/${id}`)
   const [hist, setHist] = useState(false)
+  const [writing, setWriting] = useState<any>(null)
   const { run, error: aerr } = useAction()
   // advisories ingested before this was automatic have no fix drafted yet, so ask for it once
   const asked = useRef(false)
@@ -321,25 +280,46 @@ export function AdvisoryDetail() {
     }
   }, [o])
   if (!o) return <Loading error={error} />
+  const deptGuidance = (dept: string) => [...o.guidance].reverse().find((g: any) => g.department === dept && g.status !== 'superseded')
+  const GSTATE: Record<string, [string, string]> = { pending_approval: ['cd', 'Waiting for approval'], released: ['info', 'Released'], withheld: ['over', 'Held back'], rejected: ['over', 'Rejected'] }
+  const review = o.source?.review
   if (!o.estate) return (
     <>
       <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / OBL-{String(o.id).padStart(4, '0')}</div>
-      <div className="badges" style={{ marginTop: 8 }}><Badge>{o.kind === 'policy' ? 'Policy clause' : 'Regulatory clause'}</Badge><Badge kind={o.status === 'candidate' ? 'cd' : 'info'}>{o.status}</Badge></div>
+      <div className="badges" style={{ marginTop: 8 }}><Badge>{o.kind === 'policy' ? 'Policy clause' : 'Regulatory clause'}</Badge><Badge kind={o.status === 'candidate' ? 'cd' : o.status === 'superseded' ? 'over' : 'info'}>{o.status}</Badge></div>
       <h1>{o.title}</h1>
+      {o.source && <p className="muted">From <Link to={`/documents?tab=changes&source=${o.source.id}`}>{o.source.name}</Link>
+        {review?.last_checked && <> · source last checked {fmt(review.last_checked, true)}</>}</p>}
+      {review?.status === 'overdue' && <div className="note fail" style={{ marginTop: 12 }}><b>The source has not been re-checked on time.</b> This obligation may rest on outdated wording until its owner confirms the current version on Documents.</div>}
+      {o.superseded_by && <div className="note fail" style={{ marginTop: 12 }}><b>Superseded.</b> {o.superseded_reason}. The current wording is <Link to={`/acknowledgements/${o.superseded_by.id}`}>OBL-{String(o.superseded_by.id).padStart(4, '0')}</Link> ({o.superseded_by.status}).</div>}
+      {!o.superseded_by && o.status === 'superseded' && <div className="note fail" style={{ marginTop: 12 }}><b>Superseded.</b> {o.superseded_reason}.</div>}
+      {o.supersedes && <div className="note" style={{ marginTop: 12, border: '1px solid var(--line)' }}>Replaces <Link to={`/acknowledgements/${o.supersedes.id}`}>OBL-{String(o.supersedes.id).padStart(4, '0')}</Link>, which is now {o.supersedes.status}. Departments that signed the old wording have been told to sign again once this is approved.</div>}
       {o.previous_quotation && <div className="card" style={{ marginTop: 16 }}><h2>Previous wording</h2><p className="muted">{o.previous_quotation}</p></div>}
       <div className="card" style={{ marginTop: 16 }}><h2>{o.previous_quotation ? 'Current wording' : 'Clause'}</h2><p>{o.quotation}</p>
         <p className="faint" style={{ marginTop: 8 }}>Required action: {o.required_action || '—'}</p></div>
       <div className="card" style={{ marginTop: 16 }}><h2>Departments involved</h2>
-        <p className="muted">Decided by Compliance or Legal. Cannot Determine stays open until someone decides.</p>
-        <table><thead><tr><th>Department</th><th>Owner</th><th>Why involved</th><th>Decision</th><th>Sign-off</th></tr></thead><tbody>
-          {(o.departments || []).map((d: any) => (
-            <tr key={d.department}><td><b>{d.department}</b></td><td>{d.owner || '—'}</td><td className="muted">{d.reason}</td>
+        <p className="muted">Decided by Compliance or Legal. Each department head receives guidance written for them, released only after the approver for the clause's topic agrees, and signs off by the due date.</p>
+        <table><thead><tr><th>Department</th><th>Decision</th><th>Guidance</th><th>Sign-off</th></tr></thead><tbody>
+          {(o.departments || []).map((d: any) => {
+            const g = deptGuidance(d.department)
+            const late = d.late
+            return (
+            <tr key={d.department}><td><b>{d.department}</b><div className="faint">head {d.owner || '—'}</div><div className="faint">{d.reason}</div></td>
               <td><LabelBadge label={d.label} />{d.decided_by && <div className="faint">by {d.decided_by}</div>}{d.note && <div className="faint">{d.note}</div>}</td>
+              <td style={{ maxWidth: 320 }}>{g ? <><Badge kind={GSTATE[g.status]?.[0]}>{GSTATE[g.status]?.[1] || g.status}</Badge>
+                <div className="faint">{g.status === 'pending_approval' ? `approver ${g.approver}` : g.status === 'released' ? `approved by ${g.approver}${g.human_authored ? ' · written by hand' : ''}` : g.reason}</div>
+                {g.status === 'released' && <GuidanceText g={g} />}
+                {g.status === 'pending_approval' && <button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => run(async () => { await api.post(`/guidance/${g.id}/approve`); refreshAll() })}>Approve as {g.approver}</button>}
+                {(g.status === 'withheld' || g.status === 'rejected') && <button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => setWriting(g)}>Write guidance</button>}</>
+                : <span className="faint">{o.status === 'candidate' ? 'drafted after approval' : d.label === 'does_not_apply' ? 'none needed' : '—'}</span>}</td>
               <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}{d.entered_by && <> · entered by {d.entered_by}</>}</div></>
                 : o.status === 'candidate' ? <span className="muted">Awaiting Compliance / Legal</span>
-                : <button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}>Sign off</button>}</td></tr>))}
-          {!(o.departments || []).length && <tr><td colSpan={5} className="muted">No departments recorded.</td></tr>}</tbody></table>
+                : o.status === 'superseded' ? <span className="muted">No longer needed</span>
+                : <><button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}>Sign off for {d.owner?.split(' ')[0] || 'head'}</button>
+                  {d.due && <div className={late ? 'red' : 'faint'} style={{ fontSize: 12 }}>{late ? 'overdue · ' : ''}due {fmt(d.due)}{d.escalated_to ? ` · escalated to ${d.escalated_to}` : ''}</div>}</>}</td></tr>)})}
+          {!(o.departments || []).length && <tr><td colSpan={4} className="muted">No departments recorded.</td></tr>}</tbody></table>
         {aerr && <p className="err">{aerr}</p>}</div>
+      {writing && <WriteGuidanceModal g={writing} onClose={() => setWriting(null)} />}
     </>)
   const a = o.advisory, est = o.estate
   const t = est.timings
@@ -351,7 +331,7 @@ export function AdvisoryDetail() {
         <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / ADV-{String(o.id).padStart(4, '0')}</div>
         <div className="badges" style={{ marginTop: 8 }}>{o.impact && <ImpactBadge impact={o.impact} />}<Badge kind="info">Security advisory · fast path</Badge></div>
         <h1>{a.cve} · {a.product}</h1>
-        <p className="muted" style={{ maxWidth: 760 }}>Ingested automatically on {fmt(a.published_at, true)} and matched against every asset's component records. Advisories bypass the Compliance/Legal gate.</p>
+        <p className="muted" style={{ maxWidth: 760 }}>Published {fmt(a.published_at, true)}, received {fmt(a.received_at || a.published_at, true)} from {(a.sources || []).map((x: any) => x.source).join(' and ') || 'an approved source'}, and matched against every system's component record at once. Advisories bypass the Compliance/Legal gate.</p>
       </div><button className="btn" onClick={() => setHist(true)}>Source &amp; version history</button></div>
 
       <div className="grid g2">
@@ -361,7 +341,10 @@ export function AdvisoryDetail() {
             <dt>Affected</dt><dd className="mono">{a.affected_versions.join(', ')}</dd>
             <dt>Fixed in</dt><dd className="mono">{a.fixed_version || '—'}</dd>
             <dt>Severity</dt><dd>{a.cvss == null ? 'Unknown (treated conservatively)' : `CVSS ${a.cvss.toFixed(1)}`}{a.kev ? ' · exploited in the wild' : ''}</dd>
-          </dl></div>
+            <dt>Reported by</dt><dd>{(a.sources || []).map((x: any) => <div key={x.source}>{x.source} <span className="faint">· received {fmt(x.received_at)}</span></div>)}</dd>
+          </dl>
+          {a.conflict && <div className="note fail" style={{ marginTop: 10 }}><b>Sources disagree on affected versions (A4)</b><p style={{ fontSize: 13 }}>{a.conflict} Compliance has a finding to decide which is right.</p></div>}
+          {(a.sources || []).length > 1 && !a.conflict && <p className="faint" style={{ marginTop: 8 }}>{a.sources.length} approved sources reported this CVE. It is one obligation, so owners get one task, not {a.sources.length}.</p>}</div>
         <div className="card"><div className="sec"><h2>Why High impact</h2><span className="faint">Appendix B</span></div>
           {est.why_high.length ? est.why_high.map((w: string) => <p key={w} style={{ padding: '3px 0' }}><span className="blue">✓</span> {w}</p>) : <p className="muted">No decisive trigger.</p>}
           <div className="grid g3" style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10, gap: 8 }}>
@@ -419,17 +402,33 @@ export function AdvisoryDetail() {
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Fixes Required</h2>
         {(() => {
-          const x = o.guidance[o.guidance.length - 1]
+          const x = [...o.guidance].reverse().find((y: any) => !y.asset)
           if (!x) return <p className="muted" style={{ marginTop: 10 }}>Working out the fix…</p>
           return x.status === 'draft' ? <Guidance g={x} /> : (
             <div className="note fail" style={{ marginTop: 8 }}><b>Withheld for human review</b><p>{x.reason}</p>
               <button className="btn sm" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/guidance`, { role: 'system owner' }); refreshAll() })}>Try again</button></div>)
         })()}
       </div>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Guidance sent to each system</h2>
+        <p className="muted">Written for each owner from their own component record. Released at once (fast path, C1); Information Security checks it alongside, and a held-back draft goes to Compliance (A4).</p>
+        <table style={{ marginTop: 8 }}><thead><tr><th>System · owner</th><th>Guidance</th><th>Checked alongside</th></tr></thead><tbody>
+          {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded').map((x: any) => (
+            <tr key={x.id}><td><b>{x.asset}</b><div className="faint">{x.recipient || 'no owner'}</div></td>
+              <td style={{ maxWidth: 460 }}>{x.status === 'released' ? <GuidanceText g={x} /> : <><Badge kind="over">Held back</Badge> <span className="faint">{x.reason}</span>
+                <div><button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => setWriting(x)}>Write guidance</button></div></>}</td>
+              <td>{x.consult ? (x.consulted_at ? <>{x.consult}<div className="faint">{fmt(x.consulted_at)}</div></>
+                : <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/consult`); refreshAll() })}>Mark checked as {x.consult}</button>) : <span className="faint">—</span>}</td></tr>))}
+          {!o.guidance.some((x: any) => x.asset) && <tr><td colSpan={3} className="muted">No system needs action for this advisory.</td></tr>}</tbody></table>
+      </div>
+      {writing && <WriteGuidanceModal g={writing} onClose={() => setWriting(null)} />}
       {hist && <Modal title="Source & version history" onClose={() => setHist(false)}>
-        <dl className="kv" style={{ marginTop: 10 }}><dt>Source</dt><dd>CISA/NVD (approved source)</dd><dt>CVE</dt><dd>{a.cve}</dd>
-          <dt>Published</dt><dd>{fmt(a.published_at, true)}</dd><dt>Affected</dt><dd className="mono">{a.affected_versions.join(', ')}</dd></dl>
-        <div className="actions"><Link className="btn" to={`/documents?doc=advisory/${a.id}`}>Preview as document</Link> <button className="btn" onClick={() => setHist(false)}>Close</button></div></Modal>}
+        <dl className="kv" style={{ marginTop: 10 }}><dt>CVE</dt><dd>{a.cve}</dd>
+          <dt>Published</dt><dd>{fmt(a.published_at, true)}</dd><dt>Received</dt><dd>{fmt(a.received_at, true)}</dd>
+          <dt>Matched</dt><dd>{fmt(a.ingested_at, true)}</dd><dt>Affected</dt><dd className="mono">{a.affected_versions.join(', ')}</dd></dl>
+        <table style={{ marginTop: 10 }}><thead><tr><th>Approved source</th><th>Received</th><th>Its affected versions</th></tr></thead><tbody>
+          {(a.sources || []).map((x: any) => <tr key={x.source}><td>{x.source}</td><td>{fmt(x.received_at, true)}</td><td className="mono">{x.affected_versions.join(', ')}</td></tr>)}</tbody></table>
+        <div className="actions"><button className="btn" onClick={() => setHist(false)}>Close</button></div></Modal>}
     </>
   )
 }

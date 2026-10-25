@@ -35,18 +35,22 @@ def get_record(kind: str, rid: int, db=Depends(get_db)):
         if not sv:
             raise HTTPException(404, "record not found")
         return {"title": s.name, "subtitle": f"Version {sv.version}", "text": sv.text,
-                "fields": [["Kind", s.kind], ["Approved by", s.approved_by or "—"], ["Ingested", _ts(sv.ingested_at)],
-                           ["URL", s.url or "—"]]}
+                "fields": [["Kind", s.kind], ["Jurisdiction", s.jurisdiction or "—"], ["Approved by", s.approved_by or "—"],
+                           ["Ingested", _ts(sv.ingested_at)], ["Uploaded by", sv.uploaded_by or "—"],
+                           ["Retrieved from", sv.retrieved_from or s.url or "—"], ["Effective", sv.effective_date or "—"],
+                           ["File", sv.file_name or "—"], ["SHA-256", sv.sha256 or "—"]]}
     if kind == "advisory":
         a = db.get(M.Advisory, rid)
         if not a:
             raise HTTPException(404, "record not found")
         s = db.get(M.Source, a.source_id) if a.source_id else None
         return {"title": a.cve, "subtitle": a.product, "text": a.description,
-                "fields": [["Source", s.name if s else "—"], ["Affected product", a.product],
+                "fields": [["Sources", ", ".join(x["source"] for x in a.sources or []) or (s.name if s else "—")],
+                           ["Published", _ts(a.published_at)], ["Received", _ts(a.received_at)],
+                           ["Ingested", _ts(a.ingested_at)], ["Affected product", a.product],
                            ["Affected versions", ", ".join(a.affected_versions)], ["Fixed version", a.fixed_version or "—"],
                            ["CVSS", a.cvss if a.cvss is not None else "unknown"],
-                           ["Exploited in the wild (KEV)", "yes" if a.kev else "no"], ["Published", _ts(a.published_at)]]}
+                           ["Exploited in the wild (KEV)", "yes" if a.kev else "no"], ["Conflict", a.conflict or "—"]]}
     if kind == "evidence":
         e = db.get(M.Evidence, rid)
         if not e:

@@ -14,5 +14,11 @@ def load_timings() -> dict:
         return yaml.safe_load(f)
 
 
+def load_approvals() -> dict:
+    with open(_ROOT / "approvals.yaml") as f:
+        return yaml.safe_load(f)
+
+
 TIMINGS = load_timings()
+APPROVALS = load_approvals()
 DB_URL = f"sqlite:///{DATA_DIR / 'polibridge.db'}"

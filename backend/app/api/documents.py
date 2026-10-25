@@ -1,12 +1,12 @@
-"""Documents: upload and preview PDFs/text in docs/, extract text for ingestion, and per-document update reminders.
+"""Documents: upload and preview PDFs/text in docs/ and extract their text. A document becomes evidence of a source's
+wording when it is ingested as a version of an approved source (api/sources.py), which fingerprints it.
 Only files directly inside docs/ are served. GETs need no X-User header (an <iframe> cannot send one)."""
+import hashlib
 import re
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..clock import clock
@@ -33,11 +33,19 @@ def _find(folder: str, name: str):
     return next((f for f in _files(folder) if folder in ("docs", "archive") and f.name == name), None)
 
 
+def _sha(f: Path) -> str:
+    return hashlib.sha256(f.read_bytes()).hexdigest()
+
+
 @router.get("/documents")
-def list_documents():
-    """Current documents, then every earlier version that an upload replaced."""
+def list_documents(db=Depends(get_db)):
+    """Current documents, then every earlier version that an upload replaced. Each says which source version, if
+    any, it was ingested as."""
+    linked = {}
+    for v in db.scalars(select(M.SourceVersion).where(M.SourceVersion.file_name.is_not(None))):
+        linked.setdefault(v.file_name, []).append(f"{db.get(M.Source, v.source_id).name} · v{v.version}")
     cur = [{"id": f"docs/{f.name}", "name": f.stem, "ext": f.suffix.lower().lstrip("."), "group": "Documents",
-            "size": f.stat().st_size} for f in _files()]
+            "size": f.stat().st_size, "sha256": _sha(f), "linked": linked.get(f.name, [])} for f in _files()]
     past = []
     for f in sorted(_files("archive"), key=lambda f: f.stat().st_mtime, reverse=True):
         m = re.match(r"^(.*)-(\d{8})-(\d{6})$", f.stem)
@@ -75,8 +83,7 @@ def document_text(folder: str, name: str):
 
 @router.post("/documents/upload")
 async def upload(request: Request, filename: str, db=Depends(get_db), me=Depends(actor)):
-    """Raw request body is the file. Uploading a file with the same title replaces it (the old one is archived)
-    and marks any reminder for that title as satisfied."""
+    """Raw request body is the file. Uploading a file with the same title replaces it (the old one is archived)."""
     clean = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(filename).name).strip(" .") or "document"
     ext = Path(clean).suffix.lower()
     if ext not in ALLOWED:
@@ -95,70 +102,7 @@ async def upload(request: Request, filename: str, db=Depends(get_db), me=Depends
             old.rename(DOCS / "archive" / f"{old.stem}-{clock.now():%Y%m%d-%H%M%S}{old.suffix}")
             replaced = True
     (DOCS / clean).write_bytes(body)
-    satisfied = 0
-    for r in db.scalars(select(M.DocumentReminder).where(M.DocumentReminder.document == stem)):
-        r.last_updated_at, r.last_notified_at = clock.now(), None
-        satisfied += 1
-    audit.log(db, me.directory_id, "document", 0, "uploaded", file=clean, replaced=replaced, reminders_reset=satisfied)
+    digest = hashlib.sha256(body).hexdigest()
+    audit.log(db, me.directory_id, "document", 0, "uploaded", file=clean, replaced=replaced, sha256=digest)
     db.commit()
-    return {"id": f"docs/{clean}", "name": stem, "replaced": replaced, "reminders_reset": satisfied}
-
-
-# ---------- reminders ----------
-def reminder_view(db, r: M.DocumentReminder) -> dict:
-    now = clock.now()
-    due = r.last_updated_at + timedelta(days=r.every_days)
-    left = (due - now).total_seconds() / 86400
-    owner = db.get(M.Person, r.owner_id)
-    return {"id": r.id, "document": r.document, "every_days": r.every_days, "owner": owner.name if owner else None,
-            "owner_id": r.owner_id, "last_updated_at": r.last_updated_at.isoformat(), "due_at": due.isoformat(),
-            "days_left": round(left, 1), "has_document": any(f.stem == r.document for f in _files()),
-            "status": "overdue" if left < 0 else "due_soon" if left <= SOON_DAYS else "ok"}
-
-
-@router.get("/reminders")
-def list_reminders(db=Depends(get_db)):
-    return [reminder_view(db, r) for r in db.scalars(select(M.DocumentReminder).order_by(M.DocumentReminder.id))]
-
-
-class ReminderIn(BaseModel):
-    document: str
-    owner_id: int
-    every_days: int
-    first_due: datetime | None = None  # when the first update is due; defaults to one cycle from now
-
-
-@router.post("/reminders")
-def add_reminder(body: ReminderIn, db=Depends(get_db), me=Depends(actor)):
-    title = Path(body.document).stem if Path(body.document).suffix.lower() in ALLOWED else body.document.strip()
-    if not title:
-        raise HTTPException(400, "choose a document")
-    if not 1 <= body.every_days <= 3650:
-        raise HTTPException(400, "reminder cycle must be between 1 and 3650 days")
-    owner = db.get(M.Person, body.owner_id)
-    if not owner or not owner.active:
-        raise HTTPException(400, "the reminder owner must be an active person")
-    # the cycle is counted from the last update, so the first due date fixes where the cycle starts
-    due = body.first_due
-    if due is not None and due.tzinfo is not None:  # the clock is naive UTC
-        due = due.astimezone(timezone.utc).replace(tzinfo=None)
-    start = due - timedelta(days=body.every_days) if due else clock.now()
-    r = M.DocumentReminder(document=title, owner_id=owner.id, every_days=body.every_days,
-                           last_updated_at=start, created_at=clock.now())
-    db.add(r)
-    db.flush()
-    audit.log(db, me.directory_id, "document", r.id, "reminder_set", document=title, every_days=body.every_days,
-              owner=owner.directory_id)
-    db.commit()
-    return reminder_view(db, r)
-
-
-@router.delete("/reminders/{rid}")
-def delete_reminder(rid: int, db=Depends(get_db), me=Depends(actor)):
-    r = db.get(M.DocumentReminder, rid)
-    if not r:
-        raise HTTPException(404, "reminder not found")
-    audit.log(db, me.directory_id, "document", r.id, "reminder_removed", document=r.document)
-    db.delete(r)
-    db.commit()
-    return {"ok": True}
+    return {"id": f"docs/{clean}", "name": stem, "file": clean, "replaced": replaced, "sha256": digest}

@@ -13,18 +13,18 @@ export default function Canary() {
   return (
     <>
       <div className="head"><div><h1>Canary self-tests</h1>
-        <p className="muted" style={{ maxWidth: 700 }}>Synthetic advisories, marked as tests, check that routing reaches a named person and escalation fires on time. They test the process, not whether a fix worked.</p></div>
+        <p className="muted" style={{ maxWidth: 700 }}>Synthetic advisories, marked as tests, travel through the CISA/NVD feed and the real matching rule, then check that routing reaches a named person and escalation fires on time. They test the process, not whether a fix worked.</p></div>
         <div className="card" style={{ minWidth: 160 }}><div className="faint">This quarter</div><div className="stat">{c.passed}/{c.total} passed</div></div></div>
 
       {latest && <div className={`card ${latest.status === 'failed' ? 'alert' : ''}`} style={{ marginTop: 16 }}>
         <div className="mono faint">{latest.ref} · {latest.asset.toUpperCase()} · {fmt(latest.ts, true).toUpperCase()}</div>
-        <h2 style={{ fontSize: 18, margin: '4px 0 8px' }}>{latest.status === 'failed' ? 'Failed at routing' : latest.status === 'passed' ? 'Passed' : 'Running'}</h2>
+        <h2 style={{ fontSize: 18, margin: '4px 0 8px' }}>{latest.status === 'failed' ? ({ feed: 'Failed at the feed', match: 'Failed at matching' } as Record<string, string>)[latest.stage] || 'Failed at routing' : latest.status === 'passed' ? 'Passed' : 'Running'}</h2>
         <div className="grid g2" style={{ marginTop: 0 }}>
           <div>{latest.steps.map((s: any) => (
             <div key={s.n} className="step"><span className={`r ${s.result}`}>{s.n} · {s.result.replace('_', ' ').toUpperCase()}</span>
               <div><b>{s.title}</b><div className="muted" style={{ fontSize: 13 }}>{s.detail}</div></div></div>))}</div>
           {latest.finding && <div className="note" style={{ background: '#f7f4fd', border: '1px dashed var(--purple)', alignSelf: 'start' }}>
-            <b>Finding {latest.finding.ref}</b> assigned to {latest.finding.assignee}: replace the list with a named owner. Reported separately from operational metrics.
+            <b>Finding {latest.finding.ref}</b> assigned to {latest.finding.assignee}: {latest.stage === 'feed' ? 'restore the feed, or new advisories will not arrive' : 'replace the list with a named owner'}. Reported separately from operational metrics.
             <div className="faint" style={{ marginTop: 4 }}>{latest.finding.status}</div></div>}</div></div>}
 
       <div className="card" style={{ marginTop: 16 }}>

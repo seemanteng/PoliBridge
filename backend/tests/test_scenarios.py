@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.clock import clock
 from app.models import Task, Claim, Finding, Notification, Evidence, AuditEvent, Obligation, CanaryRun, RiskAcceptance
 from app.services import intake, assignment, closure, assurance, assessment, registry
-from .conftest import STRUTS
+from .conftest import STRUTS, sign_required
 
 
 def task_for(db, ob, asset_name, kind=None):
@@ -224,6 +224,8 @@ def test_stale_inventory_reverts_to_cannot_determine_and_reopens(db, who):
                                  observed_version="2.3.32", timestamp=clock.now())
     assert ev.status == "pending"
     closure.review_evidence(db, ev, who("rverma"), True)
+    assert t.status == "fixed_pending_review"  # C2/C3: Security, the system owner and Compliance still to sign
+    sign_required(db, t)
     assert t.status == "closed" and t.disposition == "remediated"
     clock.advance(days=15)                      # scan evidence validity is 14 days for critical assets
     assurance.sweep(db)
@@ -271,6 +273,7 @@ def test_full_closure_distinguishes_remediation(db, who):
                                  component="Apache Struts", scope=["/opt/portal/**"], method="direct_version_check",
                                  observed_version="2.3.32", timestamp=clock.now())
     closure.review_evidence(db, ev, who("rverma"), True)
+    sign_required(db, portal)
     for name, root in (("ACIS Dispute Portal", "/opt/acis/**"), ("Mainframe Gateway", "/opt/gw/**")):
         t = task_for(db, ob, name, "investigation")
         e = closure.submit_evidence(db, t, who("dortiz"), purpose="absence", asset_name=name,

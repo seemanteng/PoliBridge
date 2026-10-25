@@ -26,3 +26,9 @@ component_data_stale_days: 30       # inventory older than this is "stale" (A3)
 scan_evidence_validity_days: 14     # critical internet-facing scan evidence (F1)
 risk_acceptance_max_days: 90
 impact_modifier_threshold: 4        # approved modifier combination that makes High
+
+# Source intake
+feed_max_silence_hours: 24          # a feed with no successful poll for this long raises a finding
+feed_max_failed_polls: 3            # ...as do this many failed polls in a row
+feed_ingest_min_cvss: 7.0           # below this, software in no inventory is logged, not ingested
+source_review_due_soon_days: 14     # a manual source's re-check shows as due soon inside this window

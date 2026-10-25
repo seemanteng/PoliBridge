@@ -22,10 +22,10 @@ export const Loading = ({ error }: { error?: string | null }) => (
   <p className={error ? 'err' : 'muted'}>{error ? `Could not load: ${error}` : 'Loading…'}</p>
 )
 
-export function Modal({ title, sub, onClose, children }: { title: string; sub?: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, sub, onClose, children, wide = false }: { title: string; sub?: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={wide ? { width: 880 } : undefined}>
         <h2>{title}</h2>
         {sub && <p className="muted" style={{ marginBottom: 6 }}>{sub}</p>}
         {children}

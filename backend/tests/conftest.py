@@ -44,3 +44,11 @@ def asset(db):
 
 STRUTS = dict(cve="CVE-2017-5638", product="Apache Struts", affected_versions=["2.3.5-2.3.31", "2.5-2.5.10"],
               cvss=10.0, kev=True, fixed_version="2.3.32")
+
+
+def sign_required(db, t):
+    """Collect the C2-C4 sign-offs a task's impact requires, each from the person the rule names."""
+    from app.services import closure
+    for key in list(t.required_reviewers or []):
+        if key not in (t.reviewer_signoffs or {}):
+            closure.sign_required_review(db, t, key, closure.required_signer(db, t, key))

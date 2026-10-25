@@ -190,6 +190,12 @@ def task_detail(db, t: M.Task) -> dict:
         "timeline": task_timeline(db, t),
         "evidence": [{"id": e.id, "status": e.status, "purpose": e.purpose, "reasons": e.reasons}
                      for e in db.scalars(select(M.Evidence).where(M.Evidence.task_id == t.id))],
+        "signoffs": closure.signoff_view(db, t),
+        "guidance": [{"id": g.id, "status": g.status, "text": g.text, "citations": g.citations, "reason": g.reason,
+                      "engine": g.engine, "recipient": _name(db, g.recipient_id), "consult": _name(db, g.consult_id),
+                      "consulted_at": g.consulted_at.isoformat() if g.consulted_at else None}
+                     for g in db.scalars(select(M.Guidance).where(M.Guidance.obligation_id == ob.id,
+                                                                  M.Guidance.asset_id == a.id).order_by(M.Guidance.id.desc()))],
         "can_reject": t.status in OPEN_STATES,
     }
 
@@ -271,13 +277,19 @@ def claim_detail(db, c: M.Claim) -> dict:
             b = db.get(M.BoardItem, dep.dependent_id)
             deps.append({"kind": "board_item", "label": f"Board report item {b.ref} · {b.title}",
                          "owner": _name(db, b.owner_id), "reopened": b.status == "reopened"})
+        elif dep.dependent_type == "obligation":
+            o = db.get(M.Obligation, dep.dependent_id)
+            if o:
+                deps.append({"kind": "obligation", "label": f"Obligation OBL-{o.id:04d} · {o.title}", "owner": None,
+                             "reopened": c.status == "expired" and o.status in ("open", "closed")})
     cert = next((s[5:] for s in (c.evidence_scope or []) if str(s).startswith("cert:")), None)
     hist = [{"ts": e.ts.isoformat(), "text": f"{e.action.replace('_', ' ').capitalize()}"
              + (f" · {e.detail.get('statement')}" if e.action == "created" and e.detail.get("statement") else "")}
             for e in db.scalars(select(M.AuditEvent).where(M.AuditEvent.entity == "claim",
                                                            M.AuditEvent.entity_id == c.id).order_by(M.AuditEvent.id))]
     return {
-        "id": c.id, "ref": f"{'MC' if c.claim_type == 'monitoring' else 'CLM'}-{c.id:03d}", "type": c.claim_type,
+        "id": c.id, "ref": f"{'MC' if c.claim_type == 'monitoring' else 'SRC' if c.claim_type == 'source_currency' else 'CLM'}-{c.id:03d}", "type": c.claim_type,
+        "source": db.get(M.Source, c.source_id).name if c.source_id else None,
         "statement": c.statement, "value": c.value, "status": c.status, "asset": a.name if a else None,
         "component": c.component, "evidence_scope": c.evidence_scope, "method": c.verification_method,
         "evidence_ts": c.evidence_ts.isoformat() if c.evidence_ts else None, "expiry": c.expiry.isoformat() if c.expiry else None,
@@ -299,10 +311,24 @@ def canary_view(db) -> dict:
         t = db.get(M.Task, r.task_id) if r.task_id else None
         owner = db.get(M.Person, a.owner_id) if a.owner_id else None
         named = owner is not None and owner.active and not r.failures
+        feed = r.feed or "the advisory feed"
+        early = r.stage in ("feed", "match")
         steps = [
-            {"n": 1, "title": "Test advisory injected", "result": "pass", "detail": f"PB-CANARY-{r.id:04d}, labelled TEST."},
-            {"n": 2, "title": f"Matched to {a.name}", "result": "pass", "detail": "Via its test component record."},
+            {"n": 1, "title": f"Test advisory sent through {feed}", "result": "fail" if r.stage == "feed" else "pass",
+             "detail": r.failures[0] if r.stage == "feed" else f"PB-CANARY-{r.id:04d}, labelled TEST, polled like a real advisory."},
+            {"n": 2, "title": f"Matched to {a.name}", "result": "not_run" if r.stage == "feed" else "fail" if r.stage == "match" else "pass",
+             "detail": "Blocked by step 1." if r.stage == "feed" else r.failures[0] if r.stage == "match"
+             else "The real matching rule labelled the test component Applies."},
         ]
+        if early:
+            steps.append({"n": 3, "title": "Reached a named owner", "result": "not_run", "detail": "Blocked by an earlier step."})
+            f = db.scalar(select(M.Finding).where(M.Finding.kind == "canary_failure", M.Finding.subject == f"Canary failed on {a.name}"))
+            out.append({"id": r.id, "ref": f"CNY-{r.id:04d}", "asset": a.name, "ts": r.created_at.isoformat(),
+                        "status": r.status, "failures": r.failures, "steps": steps, "stage": r.stage,
+                        "named_owner": owner.name if owner and owner.active else "No owner",
+                        "finding": ({"id": f.id, "ref": f"DQF-{f.id:04d}", "status": f.status,
+                                     "assignee": _name(db, f.assigned_to_id)} if f else None)})
+            continue
         route_fail = next((f for f in r.failures if "valid named owner" in f or "cannot receive" in f), None)
         steps.append({"n": 3, "title": "Reached a named owner", "result": "fail" if route_fail else "pass",
                       "detail": (route_fail + (f" Legacy contact: {a.legacy_contact}." if a.legacy_contact else "")
@@ -319,7 +345,7 @@ def canary_view(db) -> dict:
                           "detail": "; ".join(other) or ("Escalated on schedule." if r.status == "passed" else "Waiting for the acknowledgement window.")})
         f = db.scalar(select(M.Finding).where(M.Finding.kind == "canary_failure", M.Finding.subject == f"Canary failed on {a.name}"))
         out.append({"id": r.id, "ref": f"CNY-{r.id:04d}", "asset": a.name, "ts": r.created_at.isoformat(),
-                    "status": r.status, "failures": r.failures, "steps": steps,
+                    "status": r.status, "failures": r.failures, "steps": steps, "stage": r.stage or ("route" if r.failures else None),
                     "named_owner": (owner.name if named else "Distribution list" if a.legacy_contact else "No owner"),
                     "finding": ({"id": f.id, "ref": f"DQF-{f.id:04d}", "status": f.status,
                                  "assignee": _name(db, f.assigned_to_id)} if f else None)})

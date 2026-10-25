@@ -25,9 +25,26 @@ def init_db(eng=None):
     eng = eng or engine
     Base.metadata.create_all(eng)
     # create_all never alters existing tables: add columns introduced after a database was first seeded
-    added = {"advisory": {"description": "TEXT"},
-             "obligation": {"previous_quotation": "TEXT", "departments": "JSON"},
-             "person": {"email": "TEXT"}}
+    added = {"advisory": {"description": "TEXT", "received_at": "DATETIME", "ingested_at": "DATETIME",
+                          "sources": "JSON", "conflict": "TEXT"},
+             "obligation": {"previous_quotation": "TEXT", "departments": "JSON", "supersedes_id": "INTEGER",
+                            "superseded_reason": "TEXT", "source_version_id": "INTEGER"},
+             "person": {"email": "TEXT"},
+             "source": {"authority": "TEXT", "jurisdiction": "TEXT", "intake": "TEXT DEFAULT 'manual'",
+                        "owner_id": "INTEGER", "review_days": "INTEGER", "status": "TEXT DEFAULT 'approved'",
+                        "approved_at": "DATETIME", "proposed_by": "TEXT", "status_reason": "TEXT",
+                        "pending_file": "TEXT", "pending_version": "TEXT",
+                        "last_polled_at": "DATETIME", "last_success_at": "DATETIME",
+                        "consecutive_failures": "INTEGER DEFAULT 0", "simulate_outage": "BOOLEAN DEFAULT 0",
+                        "created_at": "DATETIME"},
+             "source_version": {"sha256": "TEXT", "file_name": "TEXT", "retrieved_from": "TEXT",
+                                "effective_date": "TEXT", "uploaded_by": "TEXT", "summary": "JSON"},
+             "claim": {"source_id": "INTEGER"},
+             "task": {"reviewer_signoffs": "JSON DEFAULT '{}'"},
+             "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
+                          "topic": "TEXT", "approver_id": "INTEGER", "approved_at": "DATETIME", "consult_id": "INTEGER",
+                          "consulted_at": "DATETIME", "human_authored": "BOOLEAN DEFAULT 0"},
+             "canary_run": {"feed": "TEXT", "stage": "TEXT"}}
     with eng.begin() as c:
         for table, cols_to_add in added.items():
             have = {r[1] for r in c.exec_driver_sql(f"PRAGMA table_info({table})")}

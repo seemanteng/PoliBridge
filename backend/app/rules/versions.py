@@ -37,5 +37,24 @@ def affected(version: str, specs: list[str]) -> bool:
     return any(in_range(version, s) for s in specs)
 
 
+def _probes(specs: list[str]) -> set[tuple]:
+    """Every version a spec mentions, plus its neighbours, so two specs that disagree anywhere disagree on a probe."""
+    out = set()
+    for s in specs:
+        for v in re.findall(r"\d+(?:\.\d+)*", s):
+            p = parse(v)
+            out.add(p)
+            for i in range(len(p)):  # neighbours at the precision the issuer used, not invented sub-releases
+                out.add(p[:i] + (p[i] + 1,) + p[i + 1:])
+                if p[i] > 0:
+                    out.add(p[:i] + (p[i] - 1,) + p[i + 1:])
+    return out
+
+
+def same_ranges(a: list[str], b: list[str]) -> bool:
+    """True when two sources' affected-version lists cover the same versions, however they are written."""
+    return all(affected(".".join(map(str, p)), a) == affected(".".join(map(str, p)), b) for p in _probes(a + b))
+
+
 def norm(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())

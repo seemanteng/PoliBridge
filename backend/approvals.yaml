@@ -1,0 +1,36 @@
+# Who approves guidance before it reaches an owner, and who is told when a clause sign-off is late.
+# Roles resolve to the first active person holding that role in the directory. Changing this file changes who
+# approves what; the rules read it, nothing hard-codes it. (Report §6.4, Appendix C rules A4 and C1, Appendix D.)
+
+advisory:
+  release: immediate        # C1 fast path: the system owner gets the fix advice at once
+  consult: ciso             # Information Security checks it alongside, not as a gate
+  withheld_to: compliance   # A4: a held-back draft goes to Compliance for interpretation
+
+# Clause guidance is approved by the topic's approver before release. First topic whose keywords appear in the
+# clause wins; otherwise default_topic applies.
+clause_topics:
+  legal:
+    label: Legal clause
+    keywords: [notify, notification, breach, contract, service provider, law enforcement, regulator, disclos]
+    approver: legal
+  security:
+    label: Security clause
+    keywords: [encrypt, multi-factor, access control, vulnerab, penetration, intrusion, authenticat, patch, monitor, incident]
+    approver: compliance
+    consult: ciso           # checks the security advice is technically right
+  governance:
+    label: Governance clause
+    keywords: [board, qualified individual, governing body, risk assessment, written, program]
+    approver: compliance
+default_topic: governance
+
+segregation_fallback: cco   # the approver can never be the recipient; the CCO steps in
+withheld_to:                # A4 for clause guidance
+  legal: legal
+  default: compliance
+
+signoff:
+  working_days: 5           # department heads sign off an approved clause within this
+  escalate_to: cco
+  escalate_to_if_cco: executive

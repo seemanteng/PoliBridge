@@ -50,11 +50,13 @@ def acknowledgements(db=Depends(get_db)):
                              "task_id": t.id if t else None, "department_key": None})
         elif o.status in ("open", "closed") and o.departments:
             for d in o.departments:
+                late = bool(d.get("due") and not d.get("signed_at") and now.isoformat() > d["due"])
                 rows.append({"key": f"o{o.id}-{d['department']}", "obligation_id": o.id, "title": o.title,
                              "kind": "Policy clause" if o.kind == "policy" else "Regulatory clause", "scope": d["department"],
                              "department": d["department"], "owner": d.get("owner"), "owner_active": True,
-                             "label": d["label"], "status": "signed" if d.get("signed_at") else "pending",
-                             "signed_by": d.get("signed_by"), "signed_at": d.get("signed_at"), "entered_by": d.get("entered_by"), "due": None,
+                             "label": d["label"], "status": "signed" if d.get("signed_at") else "overdue" if late else "pending",
+                             "signed_by": d.get("signed_by"), "signed_at": d.get("signed_at"), "entered_by": d.get("entered_by"),
+                             "due": d.get("due"), "escalated_to": d.get("escalated_to"),
                              "task_id": None, "department_key": d["department"]})
     return rows
 

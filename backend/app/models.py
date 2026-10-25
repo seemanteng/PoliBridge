@@ -80,12 +80,31 @@ class DiscoveredAsset(Base):
 
 
 class Source(Base):
+    """Approved-source registry (Appendix E). Only approved sources can feed obligations."""
     __tablename__ = "source"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String)
-    kind: Mapped[str] = mapped_column(String)  # advisory|regulator|policy|contract
+    kind: Mapped[str] = mapped_column(String)  # advisory|vendor|regulator|policy|contract
     url: Mapped[str | None] = mapped_column(String, nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    authority: Mapped[str | None] = mapped_column(String, nullable=True)  # who issues it
+    jurisdiction: Mapped[str | None] = mapped_column(String, nullable=True)  # US federal|US state (GA)|UK|Internal|Global
+    intake: Mapped[str] = mapped_column(String, default="manual")  # feed (polled) | manual (uploaded versions)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)  # watches the source
+    review_days: Mapped[int | None] = mapped_column(Integer, nullable=True)  # manual sources: re-check cycle
+    status: Mapped[str] = mapped_column(String, default="approved")  # pending|approved|suspended
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    proposed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # a suggested source can bring its text; it becomes the first version once the CCO approves the source
+    pending_file: Mapped[str | None] = mapped_column(String, nullable=True)
+    pending_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    # feed health (intake == feed)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    simulate_outage: Mapped[bool] = mapped_column(Boolean, default=False)  # mock connector switch for demos
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class SourceVersion(Base):
@@ -95,6 +114,36 @@ class SourceVersion(Base):
     version: Mapped[str] = mapped_column(String)
     text: Mapped[str] = mapped_column(Text)
     ingested_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # provenance: which file, from where, fingerprinted so an assessor can check the exact text
+    sha256: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    retrieved_from: Mapped[str | None] = mapped_column(String, nullable=True)
+    effective_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    uploaded_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # change counts and the change list
+
+
+class FeedItem(Base):
+    """One advisory as a feed delivers it. The mock connectors read waiting items once available_at passes;
+    every item keeps its outcome so the feed log shows what was ingested, merged or skipped and why."""
+    __tablename__ = "feed_item"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("source.id"))
+    cve: Mapped[str] = mapped_column(String)
+    product: Mapped[str] = mapped_column(String)
+    affected_versions: Mapped[list] = mapped_column(JSON, default=list)
+    fixed_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kev: Mapped[bool] = mapped_column(Boolean, default=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)  # when the issuer published it
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=_now)  # when the mock feed exposes it
+    status: Mapped[str] = mapped_column(String, default="waiting")  # waiting|received
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)  # ingested|merged|skipped|conflict|rejected
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    advisory_id: Mapped[int | None] = mapped_column(ForeignKey("advisory.id"), nullable=True)
+    is_canary: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Advisory(Base):
@@ -108,7 +157,12 @@ class Advisory(Base):
     cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
     kev: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)  # by the issuer, not by us
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # first source reached PoliBridge
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # matched against the estate
+    # every approved source that reported this CVE: [{source, received_at, published_at, affected_versions}]
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    conflict: Mapped[str | None] = mapped_column(Text, nullable=True)  # sources disagree on affected versions (A4)
     is_canary: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -128,8 +182,13 @@ class Obligation(Base):
     approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     applicability_decision: Mapped[str | None] = mapped_column(String, nullable=True)  # human, regulatory
     previous_quotation: Mapped[str | None] = mapped_column(Text, nullable=True)  # the clause before this version changed it
-    # departments involved: [{department, owner, reason, label, decided_by}]; label is applies|does_not_apply|cannot_determine
+    # departments involved: [{department, owner, reason, label, decided_by, due, signed_at, escalated_at}];
+    # label is applies|does_not_apply|cannot_determine
     departments: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # a changed or removed clause supersedes the obligation built on the earlier wording
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("obligation.id"), nullable=True)
+    superseded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_version_id: Mapped[int | None] = mapped_column(ForeignKey("source_version.id"), nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -138,8 +197,9 @@ class Obligation(Base):
 class Claim(Base):
     __tablename__ = "claim"
     id: Mapped[int] = mapped_column(primary_key=True)
-    # applicability|remediation|ownership|risk_acceptance|monitoring
+    # applicability|remediation|ownership|risk_acceptance|monitoring|source_currency
     claim_type: Mapped[str] = mapped_column(String)
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("source.id"), nullable=True)  # source_currency claims
     statement: Mapped[str] = mapped_column(String)
     value: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. applies|does_not_apply|cannot_determine
     asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id"), nullable=True)
@@ -190,7 +250,8 @@ class Task(Base):
     fixed_by_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     disposition: Mapped[str | None] = mapped_column(String, nullable=True)  # remediated|risk_accepted
     board_flag: Mapped[bool] = mapped_column(Boolean, default=False)
-    required_reviewers: Mapped[list] = mapped_column(JSON, default=list)
+    required_reviewers: Mapped[list] = mapped_column(JSON, default=list)  # C2-C4: security|system_owner|compliance|legal
+    reviewer_signoffs: Mapped[dict] = mapped_column(JSON, default=dict)  # {role: {by, at}}
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -255,6 +316,8 @@ class Finding(Base):
 
 
 class Guidance(Base):
+    """Drafted by RAG, never authoritative. Advisory guidance is released at once (C1) with a parallel security
+    check; clause guidance waits for the approver that approvals.yaml names for the clause's topic."""
     __tablename__ = "guidance"
     id: Mapped[int] = mapped_column(primary_key=True)
     obligation_id: Mapped[int] = mapped_column(ForeignKey("obligation.id"))
@@ -262,8 +325,19 @@ class Guidance(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     citations: Mapped[list] = mapped_column(JSON, default=list)
     grounded: Mapped[bool] = mapped_column(Boolean, default=False)
-    status: Mapped[str] = mapped_column(String, default="draft")  # draft|withheld
+    # draft|pending_approval|released|withheld|rejected|superseded (draft: obligation-level, no named recipient)
+    status: Mapped[str] = mapped_column(String, default="draft")
     reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    engine: Mapped[str | None] = mapped_column(String, nullable=True)  # openai|stub|human
+    department: Mapped[str | None] = mapped_column(String, nullable=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id"), nullable=True)
+    recipient_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)  # approvals.yaml clause topic
+    approver_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consult_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)  # reviews in parallel
+    consulted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    human_authored: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -285,6 +359,8 @@ class CanaryRun(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("task.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="running")  # running|passed|failed
     failures: Mapped[list] = mapped_column(JSON, default=list)
+    feed: Mapped[str | None] = mapped_column(String, nullable=True)  # the feed the test advisory travelled through
+    stage: Mapped[str | None] = mapped_column(String, nullable=True)  # feed|match|route: where it failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -296,15 +372,3 @@ class BoardItem(Base):
     title: Mapped[str] = mapped_column(String)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="open")  # open|reopened
-
-
-class DocumentReminder(Base):
-    """Reminds a named person to upload an updated version of a document on a fixed cycle (simulated clock)."""
-    __tablename__ = "document_reminder"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    document: Mapped[str] = mapped_column(String)  # document title (file name without extension)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("person.id"))
-    every_days: Mapped[int] = mapped_column(Integer)
-    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
