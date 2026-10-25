@@ -156,15 +156,9 @@ def load_baseline(db, anchor: datetime | None = None):
     db.flush()
     db.add(Dependency(claim_id=cert.id, dependent_type="board_item", dependent_id=board.id))
 
-    cisa = Source(name="CISA/NVD", kind="advisory", url="https://www.cisa.gov", approved_by="Compliance")
-    ftc = Source(name="FTC Safeguards Rule", kind="regulator", approved_by="Legal",
-                 url="https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-314")
-    pol = Source(name="Equifax InfoSec Policy", kind="policy", approved_by="CISO")
-    db.add_all([cisa, ftc, pol])
-    db.flush()
-    db.add(SourceVersion(source_id=pol.id, version="1", ingested_at=clock.now(), text=INFOSEC_POLICY_V1))
-    db.add(SourceVersion(source_id=ftc.id, version="2016", ingested_at=clock.now(),
-                         text=FTC_SAFEGUARDS_2016))
+    from .sources import load_sources
+    load_sources(db, live=live, anchor=A, seeded_at=clock.now(), policy_text=INFOSEC_POLICY_V1,
+                 ftc_text=FTC_SAFEGUARDS_2016)
     db.commit()
     if anchor is not None:
         clock.unfreeze()
@@ -221,6 +215,10 @@ def run_storyline(db):
                                  asset_name="Credit File API", component="struts2-core",
                                  scope=["/opt/cfapi/**"], method="authenticated_scan", observed_version="2.3.32",
                                  timestamp=clock.now())
+    # a critical system holding personal data: Security, the system owner and Compliance sign off too (C2, C3)
+    for key, did in (("security", "crhodes"), ("system_owner", "madeyemi"), ("compliance", "mlin")):
+        if key in tasks["Credit File API"].required_reviewers:
+            closure.sign_required_review(db, tasks["Credit File API"], key, me(did))
     closure.review_evidence(db, ev, me("amensah"), True, "Authenticated scan covers the component path.")
     db.commit()
 

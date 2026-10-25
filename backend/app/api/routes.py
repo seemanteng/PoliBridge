@@ -11,6 +11,7 @@ from ..rules.versions import norm
 from ..db import get_db
 from .. import models as M
 from ..services import (audit, registry, intake, nvd, rag, assessment, assignment, closure, assurance, common, views)
+from ..services import sources as sources_svc
 
 router = APIRouter(prefix="/api")
 
@@ -313,11 +314,6 @@ def broadcast(db=Depends(get_db)):
 
 
 # ---------- intake (C2) ----------
-@router.get("/sources")
-def sources(db=Depends(get_db)):
-    return sers(db.scalars(select(M.Source)))
-
-
 class AdvisoryIn(BaseModel):
     cve: str
     product: str
@@ -327,6 +323,7 @@ class AdvisoryIn(BaseModel):
     fixed_version: str | None = None
     source_name: str = "CISA/NVD"
     description: str | None = None
+    published_at: datetime | None = None
 
 
 @router.get("/advisories/lookup")
@@ -353,35 +350,25 @@ def post_advisory(body: AdvisoryIn, db=Depends(get_db), me=Depends(actor)):
     return _obligation_detail(db, ob.id)
 
 
-class SourceText(BaseModel):
-    version: str
-    text: str
-
-
-@router.post("/sources/{sid}/versions")
-def new_source_version(sid: int, body: SourceText, db=Depends(get_db)):
-    r = intake.ingest_source_version(db, one(db, M.Source, sid), body.version, body.text)
-    db.commit()
-    return r
-
-
-@router.get("/quarterly-summary")
-def quarterly(db=Depends(get_db)):
-    return intake.quarterly_summary(db)
-
-
 @router.get("/obligations")
 def obligations(status: str | None = None, db=Depends(get_db)):
     q = select(M.Obligation).where(M.Obligation.is_test == False).order_by(M.Obligation.id.desc())  # noqa: E712
     if status:
         q = q.where(M.Obligation.status == status)
     out = []
+    stale = sources_svc.stale_sources(db)
     for o in db.scalars(q):
         d = ser(o)
         ts = list(db.scalars(select(M.Task).where(M.Task.obligation_id == o.id)))
         d["task_counts"] = {"total": len(ts), "closed": sum(t.status in closure.TERMINAL for t in ts)}
+        d["source_stale"] = o.kind != "advisory" and o.source_id in stale
         out.append(d)
     return out
+
+
+def _ob_ref(db, oid):
+    o = db.get(M.Obligation, oid) if oid else None
+    return {"id": o.id, "title": o.title, "status": o.status, "quotation": o.quotation} if o else None
 
 
 def _obligation_detail(db, oid: int):
@@ -397,7 +384,17 @@ def _obligation_detail(db, oid: int):
     d["tasks"] = [task_view(db, t) for t in db.scalars(select(M.Task).where(M.Task.obligation_id == oid))]
     ok, blockers = closure.try_close_obligation(db, o) if o.status != "closed" else (True, [])
     d["closable"], d["closure_blockers"] = ok, blockers
-    d["guidance"] = sers(db.scalars(select(M.Guidance).where(M.Guidance.obligation_id == oid)))
+    now_iso = clock.now().isoformat()
+    d["departments"] = [{**x, "late": bool(x.get("due") and not x.get("signed_at") and now_iso > x["due"])}
+                        for x in (o.departments or [])] if o.departments else o.departments
+    from .sources import guidance_view
+    d["guidance"] = [guidance_view(db, g) for g in db.scalars(select(M.Guidance).where(M.Guidance.obligation_id == oid)
+                                                                 .order_by(M.Guidance.id))]
+    src = db.get(M.Source, o.source_id) if o.source_id else None
+    d["source"] = {"id": src.id, "name": src.name, "kind": src.kind, "review": sources_svc.review_state(db, src)} if src else None
+    d["supersedes"] = _ob_ref(db, o.supersedes_id)
+    later = db.scalar(select(M.Obligation).where(M.Obligation.supersedes_id == o.id))
+    d["superseded_by"] = _ob_ref(db, later.id) if later else None
     d["dispositions"] = closure.disposition_summary(db, o)
     if o.advisory_id:
         d["estate"] = views.estate(db, o)

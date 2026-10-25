@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
+import { GuidanceText } from './documents/Guidance'
 
 export function TaskList() {
   const [params, setParams] = useSearchParams()
@@ -57,6 +58,7 @@ export function TaskDetail() {
   const { run, error: aerr } = useAction()
   if (!t) return <Loading error={error} />
   const act = (path: string) => run(async () => { await api.post(path); refreshAll() })
+  const act2 = (path: string, body: unknown) => run(async () => { await api.post(path, body); refreshAll() })
   const myRisks = (risks.data || []).filter((r: any) => r.task_id === t.id)
   const open = ['open', 'reopened', 'fixed_pending_review'].includes(t.status)
   return (
@@ -97,6 +99,15 @@ export function TaskDetail() {
               <dt>Owner</dt><dd><b>{t.people.owner?.name}</b><div className="faint">{t.people.owner?.title}</div></dd>
               <dt>Manager</dt><dd>{t.people.manager || '—'}</dd><dt>Risk owner</dt><dd>{t.people.risk_owner}</dd>
               <dt>Reviewer</dt><dd>{t.people.reviewer}<div className="faint">must differ from submitter</div></dd></dl></div>
+          {t.kind === 'remediation' && t.signoffs.length > 0 && <div className="card" style={{ marginTop: 14 }}><h2>Extra sign-offs (C2–C4)</h2>
+            <p className="muted" style={{ margin: '6px 0' }}>This system's impact needs these people to sign off as well as the independent reviewer. The task closes when the last one signs.</p>
+            {t.signoffs.map((s: any) => (
+              <div key={s.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+                <div><b>{s.label}</b><div className="faint">{s.signed_by ? `${s.signed_by} · ${fmt(s.signed_at)}` : s.signer || 'nobody holds this role'}</div></div>
+                {s.signed_by ? <Badge kind="info">✓ Signed</Badge> : s.signer && <button className="btn sm" onClick={() => act2(`/tasks/${t.id}/review-signoff`, { role: s.key })}>Sign as {s.signer.split(' ')[0]}</button>}</div>))}</div>}
+          {t.guidance.length > 0 && <div className="card" style={{ marginTop: 14 }}><h2>Fix guidance for this system</h2>
+            {t.guidance[0].status === 'released' ? <GuidanceText g={t.guidance[0]} /> : <p className="muted" style={{ marginTop: 6 }}>Held back for Compliance: {t.guidance[0].reason}</p>}
+            {t.guidance[0].consult && <p className="faint" style={{ marginTop: 6 }}>{t.guidance[0].consulted_at ? `Checked by ${t.guidance[0].consult}` : `${t.guidance[0].consult} is checking it alongside`}</p>}</div>}
           <div className="card" style={{ marginTop: 14 }}><h2>To close this task</h2>
             <p className="muted" style={{ margin: '8px 0' }}>{t.close_requirement}</p>
             {open && <>

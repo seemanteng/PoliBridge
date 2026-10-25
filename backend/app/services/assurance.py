@@ -7,7 +7,8 @@ from sqlalchemy import select, func
 from ..clock import clock
 from ..config import TIMINGS
 from ..models import (Claim, Dependency, Task, Obligation, RiskAcceptance, Asset, Advisory, Finding, Person,
-                      Notification, CanaryRun, AuditEvent, BoardItem)
+                      Notification, CanaryRun, AuditEvent, BoardItem, Source, FeedItem)
+from ..rules import applicability as A
 from . import audit
 from .common import notify, raise_finding, owner_validity, bu_head, first_with_role, people_with_role
 from .assignment import tick_all, reroute_task, create_task, OPEN_STATES, countdowns, route, is_overdue
@@ -30,7 +31,10 @@ def expire_claims(db) -> list[Claim]:
         c.status = "expired"
         audit.log(db, "system", "claim", c.id, "expired", type=c.claim_type, expiry=str(c.expiry))   # F1
         owner = db.get(Person, c.owner_id) if c.owner_id else None
-        notify(db, person=owner, kind="expiry", message=f"Claim lapsed: {c.statement}. Reverted to Cannot Determine.")
+        notify(db, person=owner, kind="expiry",
+               message=(f"Re-check due: {c.statement} is no longer supported; its review cycle has lapsed."
+                        if c.claim_type == "source_currency" else
+                        f"Claim lapsed: {c.statement}. Reverted to Cannot Determine."))
         for dep in db.scalars(select(Dependency).where(Dependency.claim_id == c.id)):   # F2
             _reopen_dependent(db, c, dep)
         _type_specific(db, c)
@@ -72,11 +76,24 @@ def _reopen_dependent(db, claim: Claim, dep: Dependency):
         if b:
             b.status = "reopened"
         audit.log(db, "system", "board_item", dep.dependent_id, "reopened", because=f"{claim.statement} lapsed")
+    elif dep.dependent_type == "obligation":  # the source it quotes has not been re-checked: flag, don't reopen
+        audit.log(db, "system", "obligation", dep.dependent_id, "source_review_lapsed", because=f"{claim.statement} lapsed")
 
 
 def _type_specific(db, c: Claim):
     asset = db.get(Asset, c.asset_id) if c.asset_id else None
-    if c.claim_type == "applicability" and asset and c.obligation_id:
+    if c.claim_type == "source_currency" and c.source_id:
+        from .sources import overdue_subject
+        src = db.get(Source, c.source_id)
+        owner = db.get(Person, c.owner_id) if c.owner_id else None
+        n = db.scalar(select(func.count(Dependency.id)).where(Dependency.claim_id == c.id,
+                                                              Dependency.dependent_type == "obligation"))
+        raise_finding(db, "source_review_overdue", "High" if src.kind in ("regulator", "contract") else "Medium",
+                      overdue_subject(src),
+                      f"Last checked {c.evidence_ts:%d %b %Y} on a {src.review_days}-day cycle. {n} approved "
+                      f"obligation{'s' if n != 1 else ''} may rest on outdated wording until someone checks it.",
+                      assigned_to=owner or first_with_role(db, "compliance"))
+    elif c.claim_type == "applicability" and asset and c.obligation_id:
         ob = db.get(Obligation, c.obligation_id)
         adv = db.get(Advisory, ob.advisory_id)
         assess_asset(db, ob, adv, asset, actor="system")   # stale inventory -> Cannot Determine + investigation task
@@ -100,52 +117,60 @@ def _type_specific(db, c: Claim):
             reroute_task(db, t, "ownership attestation expired")
 
 
-def remind_documents(db) -> list[str]:
-    """Overdue document-update reminders notify the owner once per cycle and raise a finding."""
-    from datetime import timedelta
-    from ..models import DocumentReminder
-    now, due_docs = clock.now(), []
-    for r in db.scalars(select(DocumentReminder)):
-        due = r.last_updated_at + timedelta(days=r.every_days)
-        if now >= due and (r.last_notified_at is None or r.last_notified_at < due):
-            owner = db.get(Person, r.owner_id)
-            raise_finding(db, "document_update_due", "Medium", f"Updated '{r.document}' has not been uploaded",
-                          f"Due {due:%d %b %Y} on a {r.every_days}-day cycle.", assigned_to=owner)
-            notify(db, person=owner, kind="document_reminder",
-                   message=f"Please upload an updated version of '{r.document}' (due {due:%d %b %Y}).")
-            r.last_notified_at = now
-            due_docs.append(r.document)
-    return due_docs
-
-
 def sweep(db) -> dict:
     """One pass of everything time-driven. Call after advancing the clock."""
+    from . import feeds, approvals
+    polled = feeds.poll_all(db)
     tick_all(db)
     expired = expire_claims(db)
     tick_all(db)
     evaluate_canaries(db)
-    reminders = remind_documents(db)
+    silent = feeds.check_health(db)
+    late_signoffs = approvals.check_clause_signoffs(db)
     db.commit()
-    return {"expired_claims": [c.id for c in expired], "documents_due": reminders}
+    return {"expired_claims": [c.id for c in expired],
+            "sources_due": [db.get(Source, c.source_id).name for c in expired if c.claim_type == "source_currency"],
+            "feeds": [p for p in polled if p["received"] or not p["ok"]], "silent_feeds": silent,
+            "late_signoffs": late_signoffs}
 
 
 # ---- canaries (F3) ----
+CANARY_PRODUCT = "pb-canary-component"
+
+
 def run_canary(db, asset: Asset) -> CanaryRun:
-    """Inject a synthetic High Impact task, clearly marked as a test, and check the
-    routing and escalation path would work for a real one."""
-    adv = Advisory(cve=f"CANARY-{clock.now():%Y%m%d%H%M%S}", product="canary-test", affected_versions=["0"],
-                   cvss=10.0, kev=False, is_canary=True, published_at=clock.now())
-    db.add(adv)
-    db.flush()
-    ob = Obligation(kind="advisory", title=f"[TEST] {adv.cve}", advisory_id=adv.id, status="open", is_test=True,
-                    impact="High", created_at=clock.now())
-    db.add(ob)
-    db.flush()
-    task = create_task(db, obligation=ob, asset=asset, kind="remediation", impact="High", component="canary-test",
-                       is_test=True)
-    run = CanaryRun(asset_id=asset.id, task_id=task.id, created_at=clock.now())
+    """Send a test advisory, clearly marked, through the primary advisory feed and the real matching rule, then
+    check routing and escalation would work for a real one. A dead feed fails the canary at its first step."""
+    from . import feeds
+    now = clock.now()
+    src = db.scalar(select(Source).where(Source.kind == "advisory", Source.status == "approved").order_by(Source.id))
+    run = CanaryRun(asset_id=asset.id, created_at=now, feed=src.name if src else None)
     db.add(run)
     db.flush()
+    if src is None:
+        return _fail_early(db, run, "feed", "no approved advisory feed to send the test advisory through")
+    item = FeedItem(source_id=src.id, cve=f"PB-CANARY-{run.id:04d}", product=CANARY_PRODUCT, affected_versions=["1.0"],
+                    cvss=10.0, kev=False, description="TEST advisory injected by the PoliBridge canary self-test.",
+                    published_at=now, available_at=now, is_canary=True)
+    db.add(item)
+    db.flush()
+    res = feeds.poll(db, src, only=item)
+    if not res["ok"] or item.outcome != "ingested":
+        return _fail_early(db, run, "feed", f"test advisory never arrived through {src.name}: "
+                                            f"{res['error'] or item.reason}")
+    ob = db.scalar(select(Obligation).where(Obligation.advisory_id == item.advisory_id))
+    adv = db.get(Advisory, item.advisory_id)
+    comps = [{"name": c.name, "version": c.version, "conflict": c.conflict} for c in asset.components]
+    label, why = A.assess_asset(components=comps + [{"name": CANARY_PRODUCT, "version": "1.0", "conflict": False}],
+                                inventory_verified_at=now, inventory_scope=[r.rstrip("/") + "/**" for r in asset.app_roots or []],
+                                app_roots=asset.app_roots or [], product=adv.product, affected_specs=adv.affected_versions,
+                                now=now, stale_days=TIMINGS["component_data_stale_days"])
+    if label != A.APPLIES:
+        return _fail_early(db, run, "match", f"the matching rule labelled the test component {label}: {why}")
+    ob.impact = "High"
+    task = create_task(db, obligation=ob, asset=asset, kind="remediation", impact="High", component=CANARY_PRODUCT,
+                       is_test=True)
+    run.task_id = task.id
     failures = []
     ok, why = owner_validity(db, asset)
     if not ok:
@@ -158,8 +183,19 @@ def run_canary(db, asset: Asset) -> CanaryRun:
         failures.append("no active manager for escalation")
     if first_with_role(db, "ciso") is None:
         failures.append("no CISO for escalation")
+    if failures:
+        run.stage = "route"
     _finish_if_decided(db, run, task, failures)
     audit.log(db, "canary", "canary_run", run.id, run.status, asset=asset.name, failures=failures)
+    return run
+
+
+def _fail_early(db, run: CanaryRun, stage: str, failure: str) -> CanaryRun:
+    run.status, run.stage, run.failures = "failed", stage, [failure]
+    asset = db.get(Asset, run.asset_id)
+    to = first_with_role(db, "compliance") if stage == "feed" else bu_head(db, asset) or first_with_role(db, "ciso")
+    raise_finding(db, "canary_failure", "High", f"Canary failed on {asset.name}", failure, assigned_to=to)
+    audit.log(db, "canary", "canary_run", run.id, "failed", asset=asset.name, stage=stage, failures=[failure])
     return run
 
 

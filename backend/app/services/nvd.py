@@ -71,4 +71,5 @@ def lookup(cve_id: str) -> dict:
     except (httpx.HTTPError, ValueError):
         kev = None  # unknown; the form leaves the box for the user
     desc = next((d["value"] for d in cve.get("descriptions", []) if d["lang"] == "en"), "")
-    return {"cve": cve_id, "description": desc, "cvss": _cvss(cve), "kev": kev, "candidates": _candidates(cve)}
+    return {"cve": cve_id, "description": desc, "cvss": _cvss(cve), "kev": kev, "candidates": _candidates(cve),
+            "published": cve.get("published")}

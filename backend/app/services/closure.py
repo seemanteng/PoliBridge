@@ -80,18 +80,16 @@ def review_evidence(db, ev: Evidence, reviewer: Person, approve: bool, comment: 
     audit.log(db, reviewer.directory_id, "evidence", ev.id, "accepted")
     asset = db.get(Asset, task.asset_id)
     ob = db.get(Obligation, task.obligation_id)
-    adv = db.get(Advisory, ob.advisory_id)
     if ev.purpose == "remediation":
-        days = TIMINGS["scan_evidence_validity_days"] if (asset.critical or asset.internet_facing) else 90
-        claim = create_claim(
-            db, actor=reviewer.directory_id, claim_type="remediation", asset_id=asset.id, obligation_id=ob.id,
-            component=adv.product, value="remediated", statement=f"{asset.name} is patched for {adv.cve}",
-            evidence_scope=ev.scope, verification_method=ev.method, evidence_ts=ev.timestamp,
-            submitter_id=ev.submitter_id, reviewer_id=reviewer.id, owner_id=task.owner_id,
-            expiry=clock.now() + timedelta(days=days))
-        add_dependency(db, claim, "task", task.id)
-        ev.claim_id = claim.id
-        task.status, task.disposition, task.closed_at = "closed", "remediated", clock.now()
+        missing = missing_signoffs(task)
+        if missing:  # C2-C4: the evidence is good, but the task waits for the extra sign-offs its impact needs
+            task.status, task.fixed_at = "fixed_pending_review", task.fixed_at or clock.now()
+            audit.log(db, "system", "task", task.id, "awaiting_required_signoffs", missing=missing)
+            for key in missing:
+                notify(db, task=task, person=required_signer(db, task, key), kind="signoff_requested",
+                       message=f"{SIGNOFF_LABEL[key]} sign-off needed to close {asset.name}: {ob.title}")
+            return ev
+        _complete_remediation(db, task, ev, reviewer)
     else:  # absence: accepted evidence updates the inventory it rests on, then reassess
         asset.inventory_verified_at, asset.inventory_method, asset.inventory_scope = ev.timestamp, ev.method, ev.scope
         from .assessment import override_applicability
@@ -100,6 +98,74 @@ def review_evidence(db, ev: Evidence, reviewer: Person, approve: bool, comment: 
                                actor=task_owner or reviewer, reviewer=reviewer, evidence_id=ev.id)
     try_close_obligation(db, ob)
     return ev
+
+
+def _complete_remediation(db, task: Task, ev: Evidence, reviewer: Person):
+    asset = db.get(Asset, task.asset_id)
+    ob = db.get(Obligation, task.obligation_id)
+    adv = db.get(Advisory, ob.advisory_id)
+    days = TIMINGS["scan_evidence_validity_days"] if (asset.critical or asset.internet_facing) else 90
+    claim = create_claim(
+        db, actor=reviewer.directory_id, claim_type="remediation", asset_id=asset.id, obligation_id=ob.id,
+        component=adv.product, value="remediated", statement=f"{asset.name} is patched for {adv.cve}",
+        evidence_scope=ev.scope, verification_method=ev.method, evidence_ts=ev.timestamp,
+        submitter_id=ev.submitter_id, reviewer_id=reviewer.id, owner_id=task.owner_id,
+        expiry=clock.now() + timedelta(days=days))
+    add_dependency(db, claim, "task", task.id)
+    ev.claim_id = claim.id
+    task.status, task.disposition, task.closed_at = "closed", "remediated", clock.now()
+
+
+# ---------- C2-C4: sign-offs a task's impact requires before closure ----------
+SIGNOFF_ROLE = {"security": "ciso", "compliance": "compliance", "legal": "legal"}
+SIGNOFF_LABEL = {"security": "Security (C2/C3)", "system_owner": "System owner (C2)", "compliance": "Compliance (C3/C4)",
+                 "legal": "Legal (C4)"}
+
+
+def missing_signoffs(task: Task) -> list[str]:
+    return [k for k in task.required_reviewers or [] if k not in (task.reviewer_signoffs or {})]
+
+
+def required_signer(db, task: Task, key: str) -> Person | None:
+    if key == "system_owner":
+        asset = db.get(Asset, task.asset_id)
+        owner = db.get(Person, asset.owner_id) if asset.owner_id else None
+        return owner if owner and owner.active else (db.get(Person, task.owner_id) if task.owner_id else None)
+    return first_with_role(db, SIGNOFF_ROLE[key])
+
+
+def sign_required_review(db, task: Task, key: str, person: Person):
+    """Security, Compliance or Legal sign off a task their impact rule names. Everyone but the system owner must be
+    independent of the fix, like the evidence reviewer (E3)."""
+    if key not in (task.required_reviewers or []):
+        raise ValueError(f"this task does not need a {SIGNOFF_LABEL.get(key, key)} sign-off")
+    if key in (task.reviewer_signoffs or {}):
+        raise ValueError(f"{SIGNOFF_LABEL[key]} has already signed off")
+    signer = required_signer(db, task, key)
+    if signer is None or signer.id != person.id:
+        raise PermissionError(f"the {SIGNOFF_LABEL[key]} sign-off belongs to {signer.name if signer else 'nobody'}")
+    if key != "system_owner":
+        submitters = {e.submitter_id for e in db.scalars(select(Evidence).where(Evidence.task_id == task.id))}
+        if person.id == task.fixed_by_id or person.id in submitters:
+            raise PermissionError("E3: whoever fixed the system or submitted its evidence cannot also sign it off")
+    task.reviewer_signoffs = {**(task.reviewer_signoffs or {}), key: {"by": person.name, "at": clock.now().isoformat()}}
+    audit.log(db, person.directory_id, "task", task.id, "required_signoff", role=key)
+    if task.status == "fixed_pending_review" and not missing_signoffs(task):
+        ev = db.scalar(select(Evidence).where(Evidence.task_id == task.id, Evidence.purpose == "remediation",
+                                              Evidence.status == "accepted").order_by(Evidence.id.desc()))
+        if ev is not None:
+            _complete_remediation(db, task, ev, db.get(Person, ev.reviewer_id) or person)
+            try_close_obligation(db, db.get(Obligation, task.obligation_id))
+
+
+def signoff_view(db, task: Task) -> list[dict]:
+    out = []
+    for key in task.required_reviewers or []:
+        s = (task.reviewer_signoffs or {}).get(key)
+        who = required_signer(db, task, key)
+        out.append({"key": key, "label": SIGNOFF_LABEL.get(key, key), "signer": who.name if who else None,
+                    "signed_by": s["by"] if s else None, "signed_at": s["at"] if s else None})
+    return out
 
 
 def try_close_obligation(db, ob: Obligation) -> tuple[bool, list[str]]:

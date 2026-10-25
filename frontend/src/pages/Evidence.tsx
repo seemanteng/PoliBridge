@@ -46,7 +46,6 @@ export function EvidenceReview() {
   return (
     <>
       <div className="crumbs"><Link to={`/remediations/${e.task_id}`}>{e.task_ref}</Link> / EVD-{String(e.id).padStart(4, '0')}</div>
-      <div style={{ float: 'right', marginTop: 8 }}><Link to={`/documents?doc=evidence/${e.id}`}>Preview as document</Link></div>
       <div className="mono faint" style={{ marginTop: 8 }}>CLAIM · {e.purpose === 'absence' ? 'APPLICABILITY' : 'REMEDIATION'}</div>
       <h1>{e.claim}</h1>
       <p className="muted" style={{ maxWidth: 780 }}>Submitted by {e.submitter}, {fmt(e.submitted_at)}. A negative claim is held to the same standard as a fix: the evidence must have examined the component.</p>

@@ -14,6 +14,7 @@ from .api.documents import router as documents_router  # noqa: E402
 from .api.records import router as records_router  # noqa: E402
 from .api.registry_view import router as registry_router  # noqa: E402
 from .api.workflow import router as workflow_router  # noqa: E402
+from .api.sources import router as sources_router  # noqa: E402
 from .db import init_db, SessionLocal  # noqa: E402
 from .models import Person  # noqa: E402
 from .seed import replay  # noqa: E402
@@ -30,7 +31,7 @@ def _sweep_once():
 
 
 async def _sweeper():
-    """Escalation, expiry and document reminders are driven by time, so something has to look at the clock."""
+    """Feeds, escalation, expiry and source reviews are driven by time, so something has to look at the clock."""
     while True:
         await asyncio.sleep(SWEEP_EVERY_S)
         try:
@@ -50,6 +51,13 @@ async def lifespan(_):
         if not empty:
             log.warning("Database was seeded on a simulated 2017 clock; re-seeding it for live time.")
         replay.reset_demo("baseline")
+    else:
+        with SessionLocal() as db:  # a database seeded before the source registry: fill in what it is missing
+            from .seed.sources import upgrade
+            done = upgrade(db)
+            db.commit()
+        if done:
+            log.warning("Upgraded the demo data: %s", "; ".join(done))
     await asyncio.to_thread(_sweep_once)
     task = asyncio.create_task(_sweeper())
     yield
@@ -64,6 +72,7 @@ app.include_router(documents_router)
 app.include_router(records_router)
 app.include_router(registry_router)
 app.include_router(workflow_router)
+app.include_router(sources_router)
 
 
 @app.get("/api/health")
