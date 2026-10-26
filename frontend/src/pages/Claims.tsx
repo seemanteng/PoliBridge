@@ -6,9 +6,10 @@ import { Badge, Loading, Modal, useAction } from '../ui'
 const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance' }
 
 const METHODS: [string, string][] = [['authenticated_scan', 'Authenticated scan'], ['direct_version_check', 'Direct version check'], ['sbom', 'SBOM'],
-  ['sca', 'Software-composition analysis'], ['attestation', 'Attestation'], ['certificate_check', 'Certificate check']]
+  ['sca', 'Software-composition analysis'], ['attestation', 'Attestation'], ['certificate_check', 'Certificate check'],
+  ['configuration_review', 'Configuration review']]
 const TYPES: [string, string, string][] = [
-  ['monitoring', 'Monitoring', 'A control you rely on is in effect, e.g. traffic inspection with a certificate that expires.'],
+  ['monitoring', 'Monitoring', 'A control you rely on is in effect. It lapses when its certificate expires, or when its configuration is next due for review.'],
   ['ownership', 'Ownership', 'A named person owns a system. Lapses when the attestation does.'],
   ['remediation', 'Remediation', 'A fix was applied. Normally created through Remediation and Evidence review.'],
   ['applicability', 'Applicability', 'A system is affected, or cannot yet be determined. Does Not Apply needs reviewed evidence, so it is blocked here.']]
@@ -55,7 +56,7 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
       <label>What the evidence examined (comma separated)</label><input value={f.scope} onChange={(e) => set('scope', e.target.value)} placeholder="e.g. /opt/acis/**, cert:SSLV-02" />
       <div className="grid g2" style={{ marginTop: 0 }}>
         <div><label>Evidence date</label><input type="datetime-local" value={f.evidence} onChange={(e) => set('evidence', e.target.value)} /></div>
-        <div><label>Lapses on</label><input type="datetime-local" value={f.expiry} onChange={(e) => set('expiry', e.target.value)} /></div></div>
+        <div><label>{f.method === 'certificate_check' ? 'Lapses on (certificate expiry)' : f.method === 'configuration_review' ? 'Lapses on (next configuration review)' : 'Lapses on'}</label><input type="datetime-local" value={f.expiry} onChange={(e) => set('expiry', e.target.value)} /></div></div>
       <label>Told when it lapses</label>
       <select value={f.owner} onChange={(e) => set('owner', e.target.value)}><option value="">Risk &amp; Compliance team</option>
         {(people.data || []).filter((p: any) => p.active).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>

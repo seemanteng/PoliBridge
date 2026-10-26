@@ -76,3 +76,43 @@ def test_ui_views(db):
     cd = c.get(f"/api/claims/{cl['id']}").json()
     assert cd["depends_on"] and cd["status"] == "active"
     app.dependency_overrides.clear()
+
+
+def test_version_log_and_update_flags(db):
+    c = client(db)
+    c.post("/api/advisories", json=STRUTS, headers=h("pnair"))
+    reg = lambda: {a["name"]: a for a in c.get("/api/registry").json()["assets"]}  # noqa: E731
+    portal = reg()["Credit Report Portal"]
+    struts = next(x for x in portal["components"] if x["name"] == "Apache Struts")
+    # 2.3.31 is in the affected range, so PoliBridge flags the update and names the release that fixes it
+    assert struts["update_to"] == "2.3.32" and struts["advisories"][0]["cve"] == STRUTS["cve"]
+    assert portal["updates_needed"] == 1
+    # versions on record before the log existed show as its starting point
+    assert {x["component"] for x in portal["version_history"]} == {"Apache Struts", "OpenJDK"}
+    # a typed-in version cannot clear an advisory: that needs reviewed remediation evidence (A5)
+    r = c.post(f"/api/registry/assets/{portal['id']}/components", json={"name": "Apache Struts", "version": "2.3.32"},
+               headers=h("atan"))
+    assert r.status_code == 400 and "remediation evidence" in r.json()["detail"]
+    # other upgrades are logged with who made them and why
+    r = c.post(f"/api/registry/assets/{portal['id']}/components",
+               json={"name": "OpenJDK", "version": "8u131", "note": "quarterly patching"}, headers=h("atan"))
+    assert r.status_code == 200, r.text
+    top = reg()["Credit Report Portal"]["version_history"][0]
+    assert (top["component"], top["from"], top["to"], top["actor"], top["note"]) == \
+        ("OpenJDK", "8u121", "8u131", "atan", "quarterly patching")
+    assert c.post(f"/api/registry/assets/{portal['id']}/components", json={"name": "OpenJDK", "version": "8u131"},
+                  headers=h("atan")).status_code == 400  # unchanged
+    # an SBOM import logs each change against what was on record
+    sbom = {"components": [{"name": "Apache Struts", "version": "2.3.31"}, {"name": "log4j", "version": "2.17.1"}]}
+    assert c.post(f"/api/assets/{portal['id']}/sbom", json={"document": sbom}, headers=h("atan")).status_code == 200
+    hist = reg()["Credit Report Portal"]["version_history"]
+    assert {(x["component"], x["from"], x["to"]) for x in hist if x["source"] == "sbom"} == \
+        {("log4j", None, "2.17.1"), ("OpenJDK", "8u131", None)}
+    app.dependency_overrides.clear()
+
+
+def test_required_fix_picks_the_branch():
+    from app.services.registry import required_fix
+    assert required_fix("2.5.8", "2.3.32, 2.5.10.1") == "2.5.10.1"
+    assert required_fix("2.3.20", "2.3.32, 2.5.10.1") == "2.3.32"
+    assert required_fix("1.0", None) is None

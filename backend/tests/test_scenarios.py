@@ -310,3 +310,101 @@ def test_audit_trail_complete(db, who):
     ob = intake.ingest_advisory(db, **STRUTS)
     actions = {e.action for e in db.scalars(select(AuditEvent))}
     assert {"created", "created_from_advisory", "fallback_routed", "raised"} <= actions
+
+
+def test_b1_unregistered_internet_facing_asset_raises_high_finding(db, who):
+    from app.models import Asset, DiscoveredAsset
+    db.add(DiscoveredAsset(name="intranet-print01", source="network", internet_facing=False))
+    db.flush()
+    assurance.sweep(db)  # reconciliation runs on every sweep, nobody has to trigger it
+    open_ = lambda: {f.subject: f for f in db.scalars(select(Finding).where(  # noqa: E731
+        Finding.kind == "unregistered_asset", Finding.status == "open"))}
+    f = open_()["dispute-api.shadow.example"]  # seen by DNS, internet-facing, not in the register
+    assert f.severity == "High" and f.assigned_to_id == who("crhodes").id  # to the CISO
+    assert open_()["intranet-print01"].severity == "Medium"
+    assurance.sweep(db)
+    assert len(db.scalars(select(Finding).where(Finding.subject == "dispute-api.shadow.example")).all()) == 1  # no duplicate
+    # registering it resolves the finding
+    db.add(Asset(name="dispute-api.shadow.example", internet_facing=True))
+    db.flush()
+    assurance.sweep(db)
+    assert "dispute-api.shadow.example" not in open_()
+
+
+def test_b2_asset_missing_from_scanner_targets_raises_coverage_gap(db, who):
+    from app.models import Asset
+    gap = lambda name: db.scalar(select(Finding).where(  # noqa: E731
+        Finding.kind == "coverage_gap", Finding.subject == name, Finding.status == "open"))
+    hr = db.scalar(select(Asset).where(Asset.name == "HR Intranet"))
+    hr.in_scanner_targets = False
+    db.flush()
+    assurance.sweep(db)
+    # Marketing Site is internet-facing and off the scanner list; HR Intranet is internal
+    mkt = gap("Marketing Site")
+    assert mkt.severity == "High" and mkt.assigned_to_id == who("crhodes").id
+    assert gap("HR Intranet").severity == "Medium"
+    assurance.sweep(db)
+    assert len(db.scalars(select(Finding).where(Finding.kind == "coverage_gap", Finding.subject == "Marketing Site")).all()) == 1
+    # adding it to the scanner targets resolves the finding
+    db.scalar(select(Asset).where(Asset.name == "Marketing Site")).in_scanner_targets = True
+    db.flush()
+    assurance.sweep(db)
+    assert gap("Marketing Site") is None and gap("HR Intranet") is not None
+
+
+def test_b3_quarterly_attestation_reminds_then_lapses(db, who):
+    from app.config import TIMINGS
+    from app.models import Asset
+    portal = db.scalar(select(Asset).where(Asset.name == "Credit Report Portal"))
+    assert TIMINGS["attestation_days"] == 91 and registry.attestation_state(portal) == "current"
+    reminders = lambda: db.scalars(select(Notification).where(  # noqa: E731
+        Notification.kind == "attestation_due", Notification.message.contains(portal.name))).all()
+    clock.advance(days=91 - TIMINGS["attestation_due_soon_days"] + 1)
+    assurance.sweep(db)
+    assert registry.attestation_state(portal) == "due_soon"
+    assert [n.person_id for n in reminders()] == [who("atan").id]
+    assurance.sweep(db)
+    assert len(reminders()) == 1  # once per cycle
+    clock.advance(days=TIMINGS["attestation_due_soon_days"])
+    assurance.sweep(db)
+    assert registry.attestation_state(portal) == "lapsed" and not registry.owner_validity(db, portal)[0]
+    # re-attesting starts a new quarter
+    registry.attest_ownership(db, portal, who("atan"))
+    assert registry.attestation_state(portal) == "current" and registry.owner_validity(db, portal)[0]
+
+
+def test_b3_monitoring_control_by_configuration_review(db, who):
+    from app.models import Asset, Claim
+    hr = db.scalar(select(Asset).where(Asset.name == "HR Intranet"))
+    c = registry.register_monitoring_control(db, hr, "WAF policy HR-01", who("ofoo"), clock.now() + timedelta(days=30),
+                                             method="configuration_review")
+    assert c.verification_method == "configuration_review" and c.evidence_scope == ["config:WAF policy HR-01"]
+    assert c.owner_id == who("ofoo").id
+    clock.advance(days=31)
+    assurance.sweep(db)
+    assert db.get(Claim, c.id).status == "expired"  # lapses on the review date, like a certificate
+    assert db.scalar(select(Finding).where(Finding.kind == "lapsed_monitoring", Finding.subject.contains("HR-01")))
+    import pytest
+    with pytest.raises(ValueError):
+        registry.register_monitoring_control(db, hr, "x", who("ofoo"), clock.now() + timedelta(days=1), method="sbom")
+
+
+def test_mailing_list_broadcasts_summaries_to_active_employees_only(db, who):
+    import pytest
+    from app.models import Asset
+    from app.services import registry as reg
+    portal = db.scalar(select(Asset).where(Asset.name == "Credit Report Portal"))
+    for did, stake in (("ofoo", "Operations"), ("glim", "Engineering"), ("pnair", "Compliance")):
+        reg.add_to_mailing_list(db, portal, who(did), stake)
+    with pytest.raises(ValueError):
+        reg.add_to_mailing_list(db, portal, who("ofoo"))  # no duplicates
+    who("glim").active = False  # a leaver stays on the list but is never sent to
+    who("pnair").deliverable = False
+    out = reg.broadcast_summary(db, portal)
+    assert [x["name"] for x in out["sent"]] == [who("ofoo").name]
+    assert {x["reason"] for x in out["skipped"]} == {"no longer an active employee", "mailbox undeliverable"}
+    assert "Status summary for Credit Report Portal" in out["summary"]
+    # summaries only: nothing is assigned through the list
+    assert not db.scalar(select(Task).where(Task.owner_id == who("ofoo").id, Task.asset_id == portal.id))
+    with pytest.raises(ValueError):
+        reg.add_to_mailing_list(db, portal, who("glim"))  # leavers cannot be added

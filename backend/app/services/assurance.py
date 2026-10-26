@@ -127,6 +127,9 @@ def sweep(db) -> dict:
     evaluate_canaries(db)
     silent = feeds.check_health(db)
     late_signoffs = approvals.check_clause_signoffs(db)
+    from .registry import reconcile_discovery, attestation_reminders
+    reconcile_discovery(db)  # B1, B2: the register is checked against discovery on every pass
+    attestation_reminders(db)  # B3: owners are asked to re-attest before the quarter runs out
     db.commit()
     return {"expired_claims": [c.id for c in expired],
             "sources_due": [db.get(Source, c.source_id).name for c in expired if c.claim_type == "source_currency"],
