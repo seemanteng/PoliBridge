@@ -43,7 +43,7 @@ function buildItems(rows: any[], obs: any[], sources: any[]) {
 
 function AddNewModal({ onClose, onPick }: { onClose: () => void; onPick: (k: 'advisory' | 'document') => void }) {
   const opt = (k: 'advisory' | 'document', title: string, text: string) => (
-    <button className="btn block" style={{ textAlign: 'left', marginBottom: 10, padding: '12px 14px' }} onClick={() => onPick(k)}>
+    <button className="btn choice block" style={{ marginBottom: 10 }} onClick={() => onPick(k)}>
       <b>{title}</b><div className="muted" style={{ marginTop: 2 }}>{text}</div></button>)
   return (
     <Modal title="What is new?" sub="Either one creates items below for the affected systems or departments." onClose={onClose}>
@@ -83,7 +83,7 @@ export function AdvisoryList() {
         : r.status === 'overdue' ? <><Badge kind="over">Overdue</Badge>{r.escalated_to && <div className="faint">escalated to {r.escalated_to}</div>}</>
         : r.status === 'pending' ? <><Badge kind="cd">Waiting</Badge>{r.due && r.kind !== 'Advisory' && <div className="faint">due {fmt(r.due)}</div>}</>
         : <span className="muted">Nothing to do</span>}</td>
-      <td style={{ whiteSpace: 'nowrap' }}>{(r.status === 'pending' || r.status === 'overdue') && <button className="btn sm primary" onClick={() => sign(r)}>Sign off</button>}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>{(r.status === 'pending' || r.status === 'overdue') && <button className="btn signoff" onClick={() => sign(r)}><span className="signoff-icon" aria-hidden="true">✓</span>Sign off</button>}</td>
     </tr>)
 
   return (
@@ -98,14 +98,14 @@ export function AdvisoryList() {
         <h2>Needs action</h2>
         {!mine.length && !toReview.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs action right now.</p>}
         {toReview.length > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+          <div className="ack-action-row">
             <div><b>{toReview.length} clause{toReview.length > 1 ? 's' : ''} to review</b><div className="muted">Decide what each changed clause means for the departments involved.</div></div>
             <button className="btn sm primary" onClick={() => setRev(toReview[0])}>Review next clause</button></div>)}
         {mine.map((r: any) => (
-          <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+          <div key={r.key} className="ack-action-row">
             <div><b>{r.scope}</b> <LabelBadge label={r.label} />{r.status === 'overdue' && <> <Badge kind="over">Overdue</Badge></>}
               <div className="muted">{r.title} · owner {r.owner || 'none'}</div></div>
-            <button className="btn sm primary" onClick={() => sign(r)}>Sign off for {r.owner ? r.owner.split(' ')[0] : 'owner'}</button></div>))}
+            <button className="btn signoff" onClick={() => sign(r)}><span className="signoff-icon" aria-hidden="true">✓</span>Sign off for {r.owner ? r.owner.split(' ')[0] : 'owner'}</button></div>))}
         {aerr && <p className="err">{aerr}</p>}
       </div>
 
@@ -315,7 +315,7 @@ export function AdvisoryDetail() {
               <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}{d.entered_by && <> · entered by {d.entered_by}</>}</div></>
                 : o.status === 'candidate' ? <span className="muted">Awaiting Compliance / Legal</span>
                 : o.status === 'superseded' ? <span className="muted">No longer needed</span>
-                : <><button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}>Sign off for {d.owner?.split(' ')[0] || 'head'}</button>
+                : <><button className="btn signoff" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/signoff`, { department: d.department }); refreshAll() })}><span className="signoff-icon" aria-hidden="true">✓</span>Sign off for {d.owner?.split(' ')[0] || 'head'}</button>
                   {d.due && <div className={late ? 'red' : 'faint'} style={{ fontSize: 12 }}>{late ? 'overdue · ' : ''}due {fmt(d.due)}{d.escalated_to ? ` · escalated to ${d.escalated_to}` : ''}</div>}</>}</td></tr>)})}
           {!(o.departments || []).length && <tr><td colSpan={4} className="muted">No departments recorded.</td></tr>}</tbody></table>
         {aerr && <p className="err">{aerr}</p>}</div>

@@ -13,7 +13,7 @@ from ..db import get_db
 from .. import models as M
 from ..config import TIMINGS
 from ..identity import valid_email
-from ..services import assessment, assignment, audit, common, registry as reg, views
+from ..services import assessment, assignment, audit, assurance, common, registry as reg, views
 from .routes import actor, approver_for, on_behalf
 
 router = APIRouter(prefix="/api/registry")
@@ -104,6 +104,8 @@ def registry(db=Depends(get_db)):
             "bu_head": name(bu.head_id) if bu else None,
             "ownership_attested_at": _iso(a.ownership_attested_at),
             "attestation": {"state": reg.attestation_state(a), "due": _iso(reg.attestation_due(a))},
+            "confirmation": {"state": assurance.confirmation_state(db, a),
+                             "due": _iso(assurance.confirmation_due(db, a))},
             "inventory": {"verified_at": _iso(verified), "method": a.inventory_method, "scope": a.inventory_scope,
                           "state": "none" if not verified else "stale" if now - verified > timedelta(days=stale_days) else "current"},
             "in_scanner_targets": a.in_scanner_targets,

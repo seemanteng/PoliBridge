@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { api, fmt, fmtDay, refreshAll, useApi } from '../../api'
 import { Loading, Modal, useAction } from '../../ui'
-import { FeedBadge, KIND_LABEL, PeopleSelect, ReviewBadge, StatusBadge } from './common'
+import { ActionMenu, FeedBadge, KIND_LABEL, PeopleSelect, ReviewBadge, StatusBadge } from './common'
 import { NewVersionModal } from './NewVersion'
 
 const JURISDICTIONS = ['US federal', 'US state', 'UK', 'EU', 'Internal', 'Global']
@@ -93,11 +93,16 @@ export default function Sources() {
     const got = list.flatMap((x: any) => x.received.map((t: string) => `${x.source}: ${t}`))
     setNote([got.length ? got.join(' · ') : 'Nothing new.', ...list.filter((x: any) => !x.ok).map((x: any) => `${x.source}: ${x.error}`)].join(' '))
   }
-  const approveCell = (s: any) => s.status !== 'approved' && (
-    <button className="btn sm primary" disabled={busy} onClick={() => act(`/sources/${s.id}/approve`)}>{s.status === 'suspended' ? 'Restore (as CCO)' : 'Approve (as CCO)'}</button>)
-  const editCells = (s: any) => <>
-    <button className="btn sm" onClick={() => setDlg({ kind: 'edit', s })}>Edit</button>
-    {s.status === 'approved' && <button className="btn sm danger" onClick={() => setDlg({ kind: 'suspend', s })}>Suspend</button>}</>
+  const sourceActions = (s: any, feed: boolean) => <ActionMenu label={`Actions for ${s.name}`} items={[
+    { label: feed ? 'Open feed' : 'Open source', href: feed ? `/documents?tab=feed&source=${s.id}` : `/documents?tab=changes&source=${s.id}` },
+    ...(s.status !== 'approved' ? [{ label: s.status === 'suspended' ? 'Restore source' : 'Approve source', onSelect: () => act(`/sources/${s.id}/approve`) }] : []),
+    ...(s.status === 'approved' && !feed ? [
+      { label: 'Mark as reviewed', onSelect: () => act(`/sources/${s.id}/check`, {}) },
+      { label: 'Upload new version', onSelect: () => setDlg({ kind: 'version', s }) },
+    ] : []),
+    { label: 'Edit source', onSelect: () => setDlg({ kind: 'edit', s }) },
+    ...(s.status === 'approved' ? [{ label: 'Suspend source', onSelect: () => setDlg({ kind: 'suspend', s }), danger: true }] : []),
+  ]} />
   const name = (s: any) => <>
     <b>{s.name}</b> {s.status !== 'approved' && <StatusBadge status={s.status} />}
     <div className="faint">{KIND_LABEL[s.kind] || s.kind} · {s.jurisdiction || '—'} · {s.authority || '—'}</div>
@@ -118,7 +123,7 @@ export default function Sources() {
             <button className="btn primary" disabled={busy} onClick={() => run(async () => { say(await api.post('/feeds/release-next')); refreshAll() })}>Send next demo alert</button></div></div>
         <p className="faint">Demo shortcut: the feeds are simulated, so Send next demo alert delivers the next queued alert now instead of waiting.</p>
         {note && <p className="muted" style={{ marginTop: 4 }}>{note}</p>}
-        <table style={{ marginTop: 6 }}><thead><tr><th>Feed</th><th>Status</th><th>Owner</th><th>Alerts</th><th style={{ width: 200 }}></th></tr></thead><tbody>
+        <table style={{ marginTop: 6 }}><thead><tr><th>Feed</th><th>Status</th><th>Owner</th><th>Alerts</th><th style={{ width: 72 }}>Actions</th></tr></thead><tbody>
           {feeds.map((s: any) => (
             <tr key={s.id} className={s.feed?.state === 'silent' ? 'bad' : ''} style={{ cursor: 'pointer' }} onClick={open(`/documents?tab=feed&source=${s.id}`)}>
               <td>{name(s)}</td>
@@ -128,8 +133,7 @@ export default function Sources() {
               <td>{s.alerts && <><b>{s.alerts.alerts}</b> alert{s.alerts.alerts === 1 ? '' : 's'}{s.alerts.new > 0 && <> · <span className="blue">{s.alerts.new} new</span></>}
                 <div className="faint">{s.alerts.systems_affected} system{s.alerts.systems_affected === 1 ? '' : 's'} affected{s.alerts.awaiting_ack ? ` · ${s.alerts.awaiting_ack} waiting for owners` : ''}</div>
                 {s.alerts.queued > 0 && <div className="faint">{s.alerts.queued} demo alert{s.alerts.queued === 1 ? '' : 's'} queued</div>}</>}</td>
-              <td style={{ textAlign: 'right' }}>{approveCell(s)}
-                <Link className="btn sm primary" style={{ textDecoration: 'none' }} to={`/documents?tab=feed&source=${s.id}`}>Open</Link>{' '}{editCells(s)}</td>
+              <td style={{ textAlign: 'center' }}>{sourceActions(s, true)}</td>
             </tr>))}
           {!feeds.length && <tr><td colSpan={5} className="muted">No security feeds yet.</td></tr>}</tbody></table>
       </div>
@@ -137,7 +141,7 @@ export default function Sources() {
       <div className="card" style={{ marginTop: 16 }}>
         <div className="sec"><div><h2>Source texts</h2>
           <p className="muted" style={{ maxWidth: 720 }}>Laws, policies and contracts. Each is one document that gets amended over time, so it has versions. Open one to compare its versions clause by clause.</p></div></div>
-        <table><thead><tr><th>Source</th><th>Reviewed</th><th>Owner</th><th>Status</th><th>Obligations</th><th style={{ width: 230 }}></th></tr></thead><tbody>
+        <table><thead><tr><th>Source</th><th>Reviewed</th><th>Owner</th><th>Status</th><th>Obligations</th><th style={{ width: 72 }}>Actions</th></tr></thead><tbody>
           {texts.map((s: any) => (
             <tr key={s.id} className={s.review.status === 'overdue' ? 'bad' : ''} style={{ cursor: 'pointer' }} onClick={open(`/documents?tab=changes&source=${s.id}`)}>
               <td>{name(s)}</td>
@@ -147,10 +151,7 @@ export default function Sources() {
                 <div className="faint">{s.review.last_checked ? `reviewed ${fmtDay(s.review.last_checked, true)}` : 'never reviewed'}</div>
                 {s.review.next_due && <div className="faint">due {fmtDay(s.review.next_due, true)}</div>}</td>
               <td>{s.obligations.approved} approved<div className="faint">{s.obligations.candidate} to review · {s.obligations.superseded} superseded</div></td>
-              <td style={{ textAlign: 'right' }}>{approveCell(s)}
-                {s.status === 'approved' && <div style={{ marginBottom: 4, whiteSpace: 'nowrap' }}><button className="btn sm primary" disabled={busy} onClick={() => act(`/sources/${s.id}/check`, {})} title="Confirm you checked this source and nothing has changed">Mark as reviewed</button>{' '}
-                  <button className="btn sm" onClick={() => setDlg({ kind: 'version', s })}>Upload new version</button></div>}
-                <div style={{ whiteSpace: 'nowrap' }}><Link className="btn sm" style={{ textDecoration: 'none' }} to={`/documents?tab=changes&source=${s.id}`}>Open</Link>{' '}{editCells(s)}</div></td>
+              <td style={{ textAlign: 'center' }}>{sourceActions(s, false)}</td>
             </tr>))}
           {!texts.length && <tr><td colSpan={6} className="muted">No source texts yet.</td></tr>}</tbody></table>
         {aerr && <p className="err">{aerr}</p>}

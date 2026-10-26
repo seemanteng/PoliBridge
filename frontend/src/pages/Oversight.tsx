@@ -1,17 +1,60 @@
-import { useState, type ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { fmt, fmtDay, useApi } from '../api'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { api, fmt, fmtDay, useApi } from '../api'
 import { Badge, Loading, Modal } from '../ui'
 import { Controls } from '../filters'
 import { has, uniq } from '../filterUtils'
 
 const TABS = [['dashboard', 'Dashboard'], ['log', 'Audit log'], ['notifications', 'Notifications']] as const
+type IssueKey = 'overdue_tasks' | 'cannot_determine' | 'accepted_risks' | 'expired_evidence' | 'failed_deliveries' | 'pending_confirmations' | 'overdue_confirmations' | 'lapsed_monitoring' | 'canary'
+type IssueItem = { label: string; detail: string; href: string }
+const confirmationStatus = (a: any) => a.state === 'overdue' || a.state === 'lapsed'
+  ? `Overdue since ${fmtDay(a.due, true)}`
+  : a.due ? `Confirm by ${fmtDay(a.due, true)}` : 'Due date unavailable'
+const FALLBACK: Record<IssueKey, string> = {
+  overdue_tasks: '/remediations', cannot_determine: '/claims', accepted_risks: '/remediations',
+  expired_evidence: '/claims', failed_deliveries: '/oversight?tab=notifications',
+  pending_confirmations: '/registry?tab=Systems', overdue_confirmations: '/registry?tab=Systems',
+  lapsed_monitoring: '/claims', canary: '/alerts?tab=selftests',
+}
+
+async function relatedRecords(key: IssueKey, oversight: any): Promise<IssueItem[]> {
+  if (Array.isArray(oversight.drilldowns?.[key])) return oversight.drilldowns[key]
+  const item = (label: string, detail: string, href: string): IssueItem => ({ label, detail, href })
+  if (key === 'overdue_tasks') return (oversight.overdue || []).map((t: any) =>
+    item(t.title, `${t.owner || 'No owner'} · ${t.late_by} late`, `/remediations/${t.id}`))
+  if (key === 'pending_confirmations' || key === 'overdue_confirmations') {
+    const all = oversight.confirmations || oversight.overdue_confirmations || []
+    return all.filter((a: any) => key === 'overdue_confirmations'
+      ? a.state === 'overdue' || a.state === 'lapsed' : a.state !== 'overdue' && a.state !== 'lapsed')
+      .map((a: any) => item(a.asset, `${a.owner || 'No owner'} · ${confirmationStatus(a)}`,
+        `/registry?tab=Systems&asset=${a.asset_id}`))
+  }
+  if (key === 'failed_deliveries') return (oversight.failed_deliveries || []).map((n: any) =>
+    item(`${n.kind.replace(/_/g, ' ')} to ${n.recipient || 'no recipient'}`, n.message,
+      `/oversight?tab=notifications&notification=${n.id}`))
+  if (key === 'cannot_determine' || key === 'expired_evidence' || key === 'lapsed_monitoring') {
+    const claims = await api.get('/claims')
+    return claims.filter((c: any) => key === 'cannot_determine'
+      ? c.claim_type === 'applicability' && c.status === 'active' && c.value === 'cannot_determine'
+      : c.status === 'expired' && (key !== 'lapsed_monitoring' || c.claim_type === 'monitoring'))
+      .map((c: any) => item(c.asset || c.statement, c.statement, `/claims/${c.id}`))
+  }
+  if (key === 'accepted_risks') {
+    const risks = await api.get('/risk-acceptances')
+    return risks.filter((r: any) => r.status === 'approved').map((r: any) =>
+      item(`Risk acceptance RA-${r.id}`, `Task ${r.task_id} · expires ${fmt(r.expiry, true)}`, `/remediations/${r.task_id}`))
+  }
+  const canary = await api.get('/canary')
+  return canary.runs.filter((r: any) => r.status !== 'running').map((r: any) =>
+    item(r.asset, `${r.ref} · ${r.status}`, `/alerts?tab=selftests&run=${r.id}`))
+}
 
 function TabBar({ tab }: { tab: string }) {
   const [, setParams] = useSearchParams()
   return (
-    <div style={{ display: 'flex', gap: 8, margin: '14px 0 4px' }}>{TABS.map(([k, l]) => (
-      <button key={k} className={`btn ${tab === k ? 'primary' : ''}`} onClick={() => setParams(k === 'dashboard' ? {} : { tab: k })}>{l}</button>))}</div>
+    <div className="tabs" role="group" aria-label="Oversight sections">{TABS.map(([k, l]) => (
+      <button key={k} className={`btn ${tab === k ? 'primary' : ''}`} aria-pressed={tab === k} onClick={() => setParams(k === 'dashboard' ? {} : { tab: k })}>{l}</button>))}</div>
   )
 }
 
@@ -31,47 +74,115 @@ export default function Oversight() {
 function Dashboard({ tabs }: { tabs: ReactNode }) {
   const { data: o, error } = useApi('/oversight')
   const [board, setBoard] = useState(false)
+  const [issue, setIssue] = useState<{ title: string; items: IssueItem[] } | null>(null)
+  const [loadingKey, setLoadingKey] = useState<IssueKey | null>(null)
+  const navigate = useNavigate()
   if (!o) return <Loading error={error} />
   const k = o.kpis
-  const kpi = (label: string, value: React.ReactNode, sub: React.ReactNode, cls = '') => (
-    <div className={`card kpi ${cls}`}><div className="l">{label}</div><div className="v">{value}</div><div className="l">{sub}</div></div>
+  const confirmations = o.confirmations || o.overdue_confirmations || []
+  const overdueConfirmations = k.pending_confirmations === undefined
+    ? confirmations.filter((a: any) => a.state === 'overdue' || a.state === 'lapsed').length
+    : k.overdue_confirmations
+  const pendingConfirmations = k.pending_confirmations === undefined
+    ? confirmations.length - overdueConfirmations : k.pending_confirmations
+  const openIssue = async (key: IssueKey, title: string) => {
+    setLoadingKey(key)
+    try {
+      const items = await relatedRecords(key, o)
+      if (items.length === 1) navigate(items[0].href)
+      else if (items.length === 0) navigate(FALLBACK[key])
+      else setIssue({ title, items })
+    } catch {
+      navigate(FALLBACK[key])
+    } finally {
+      setLoadingKey(null)
+    }
+  }
+  const tone: Partial<Record<IssueKey, string>> = {
+    overdue_tasks: 'tone-danger', failed_deliveries: 'tone-danger', overdue_confirmations: 'tone-danger',
+    cannot_determine: 'tone-warning', pending_confirmations: 'tone-warning',
+    expired_evidence: 'tone-purple', canary: 'tone-purple', accepted_risks: 'tone-good',
+  }
+  const kpi = (key: IssueKey, label: string, value: React.ReactNode, sub: React.ReactNode, cls = '') => (
+    <button type="button" className={`card kpi kpi-link ${tone[key] || ''} ${cls}`} onClick={() => openIssue(key, label)}
+      aria-label={`${label}: ${typeof value === 'number' || typeof value === 'string' ? value : ''}. Open related records`}>
+      <div className="l">{label}</div><div className="v">{value}</div><div className="l">{sub}</div>
+      <div className="kpi-open">{loadingKey === key ? 'Opening…' : 'View records →'}</div>
+    </button>
   )
   return (
     <>
       <div className="head">
         <div>
           <h1>Oversight</h1>
-          <p className="muted">What needs a decision today, across every claim PoliBridge holds.</p>
+          <p className="muted">Monitor overdue actions, ownership confirmations, evidence validity, and notification delivery.</p>
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <span className="chip">SYNTHETIC DATA · {fmt(o.now, true).toUpperCase()}</span>
-          <button className="btn primary" onClick={() => setBoard(true)}>Board summary</button>
+          <button className="btn primary" onClick={() => setBoard(true)}>Management summary</button>
         </div>
       </div>
 
       {tabs}
-      {o.banner && (
-        <div className="banner">
-          <Badge kind="high">High impact</Badge>
-          <span><b>{o.banner.title.replace(': ', ' · ')}</b> — {o.banner.text}</span>
-          <Link to={`/acknowledgements/${o.banner.obligation_id}`}>Open advisory →</Link>
-        </div>
-      )}
+      <h2 className="oversight-group-title">Items requiring attention</h2>
+      <div className="grid oversight-cards">
+        {kpi('overdue_tasks', 'Overdue actions', k.overdue_tasks,
+          `${o.high_overdue} high impact · remediation or investigation deadlines passed`)}
+        {kpi('cannot_determine', 'Applicability unresolved', k.cannot_determine,
+          'Further assessment is needed to determine impact', 'cdk')}
+        {kpi('expired_evidence', 'Expired evidence', k.expired_evidence,
+          k.lapsed_monitoring ? `Includes ${k.lapsed_monitoring} monitoring control${k.lapsed_monitoring === 1 ? '' : 's'} requiring re-verification`
+            : 'Supporting evidence requires renewal')}
+        {kpi('failed_deliveries', 'Failed notifications', k.failed_deliveries,
+          'Notifications that did not reach their recipients')}
+      </div>
 
-      <div className="grid g6">
-        {kpi('Overdue remediations', k.overdue_tasks, <span className="red">{o.high_overdue} High impact</span>)}
-        {kpi('Cannot Determine', k.cannot_determine, 'assets blocking closure', 'cdk')}
-        {kpi('Active risk acceptances', k.accepted_risks,
-          o.risk_expiring_soon ? `${o.risk_expiring_soon} expires in ${o.risk_expiring_days} days` : 'none expiring soon')}
-        {kpi('Expired evidence', k.expired_evidence, 'claims reverted')}
-        {kpi('Lapsed monitoring', <span className={k.lapsed_monitoring ? 'red' : ''}>{k.lapsed_monitoring}</span>, 'monitoring claims')}
-        {kpi('Canary pass rate', <>{k.canary.passed}<span className="muted" style={{ fontSize: 18 }}>/{k.canary.runs}</span></>,
-          o.canary_failure ? <span className="red">{o.canary_failure.asset.split(' ·')[0]} routing failed</span> : 'all passing')}
+      <h2 className="oversight-group-title">Ownership confirmations</h2>
+      <div className="grid oversight-cards oversight-cards-two">
+        {kpi('pending_confirmations', 'Pending confirmations', pendingConfirmations,
+          'Awaiting owner confirmation before the due date')}
+        {kpi('overdue_confirmations', 'Overdue confirmations', overdueConfirmations,
+          'Owner confirmation was not completed by the due date')}
+      </div>
+      {!o.drilldowns && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Due dates are unavailable from the currently running backend.</p>}
+
+      <h2 className="oversight-group-title">Assurance checks</h2>
+      <div className="grid oversight-cards oversight-cards-two">
+        {kpi('accepted_risks', 'Active risk acceptances', k.accepted_risks,
+          o.risk_expiring_soon ? `${o.risk_expiring_soon} expire within ${o.risk_expiring_days} days` : 'Approved exceptions under review')}
+        {kpi('canary', 'Notification test results', k.canary.runs ? `${k.canary.passed}/${k.canary.runs}` : '—',
+          k.canary.runs ? `${k.canary.runs - k.canary.passed} failed · verifies delivery and escalation` : 'No completed tests yet')}
+      </div>
+
+      <div className="grid g21" style={{ gridTemplateColumns: '1fr 1fr', marginTop: 16 }}>
+        <div className="card">
+          <div className="sec"><h2>Messages that did not arrive</h2><Link to="/oversight?tab=notifications">All notifications</Link></div>
+          {o.failed_deliveries.slice(0, 6).map((n: any) => <p key={n.id} style={{ margin: '8px 0' }}>
+            <Link to={`/oversight?tab=notifications&notification=${n.id}`}><b>{n.kind.replace(/_/g, ' ')}</b> to {n.recipient || 'no recipient'}</Link> · {fmt(n.ts, true)}
+            {n.task_id && <> · <Link to={`/remediations/${n.task_id}`}>Task {n.task_id}</Link></>}
+          </p>)}
+          {!o.failed_deliveries.length && <p className="muted">No failed deliveries.</p>}
+        </div>
+        <div className="card">
+          <div className="sec"><h2>Owners who need to confirm</h2><Link to="/registry">Registry</Link></div>
+          {confirmations.slice(0, 6).map((a: any) => <p key={a.asset_id} style={{ margin: '8px 0' }}>
+            <Link to={`/registry?tab=Systems&asset=${a.asset_id}`}><b>{a.asset}</b></Link> · {a.owner || 'No owner'} · {confirmationStatus(a)}
+          </p>)}
+          {!confirmations.length && <p className="muted">All ownership confirmations are current.</p>}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="sec"><h2>Who changed the mailing list</h2><Link to="/oversight?tab=log">Full audit log</Link></div>
+        {o.mailing_list_changes.slice(0, 6).map((e: any) => <p key={e.id} style={{ margin: '8px 0' }}>
+          <span className="mono muted">{fmt(e.ts, true)}</span> · <Link to={`/registry?tab=Systems&asset=${e.asset_id}`}><b>{e.asset}</b></Link> · {e.action.replace(/_/g, ' ')} · {e.actor}
+        </p>)}
+        {!o.mailing_list_changes.length && <p className="muted">No mailing-list changes recorded.</p>}
       </div>
 
       <div className="grid g21" style={{ gridTemplateColumns: '1.1fr 1fr' }}>
         <div className="card">
-          <div className="sec"><h2>Overdue and escalated</h2><Link to="/remediations">All remediations</Link></div>
+          <div className="sec"><h2>Late tasks</h2><Link to="/remediations">All work</Link></div>
           <table>
             <thead><tr><th>Remediation</th><th>Owner</th><th>Late by</th><th>Escalated to</th></tr></thead>
             <tbody>
@@ -88,7 +199,7 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
           </table>
         </div>
         <div className="card">
-          <div className="sec"><h2>Recently lapsed claims</h2><Link to="/claims">All claims</Link></div>
+          <div className="sec"><h2>Recently invalidated checks</h2><Link to="/claims">All checks</Link></div>
           {o.lapsed.map((l: any, i: number) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '52px 1fr', gap: 10, padding: '10px 0', borderBottom: '1px solid #efede6' }}>
               <span className="mono muted">{fmtDay(l.ts)}</span>
@@ -106,13 +217,19 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
         <div className="card" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 20 }}>
           <div style={{ flex: 1 }}>
             <div className="mono faint">SELF-TEST · {o.canary_failure.ref} · {o.canary_failure.asset.split(' ·')[0].toUpperCase()}</div>
-            <h2 style={{ fontSize: 17, margin: '4px 0' }}>Routing canary failed</h2>
+            <h2 style={{ fontSize: 17, margin: '4px 0' }}>A notification self-test failed</h2>
             <p className="muted">{o.canary_failure.failures[0]}. Reported separately from operational metrics.</p>
           </div>
           <Link className="btn" to="/alerts?tab=selftests" style={{ textDecoration: 'none' }}>View canary run</Link>
         </div>
       )}
       {board && <BoardSummary onClose={() => setBoard(false)} />}
+      {issue && <Modal title={issue.title} sub="Choose a record to inspect." onClose={() => setIssue(null)} wide>
+        {issue.items.map((item: IssueItem, i: number) => <Link key={`${item.href}-${i}`} className="issue-row" to={item.href} onClick={() => setIssue(null)}>
+          <span><b>{item.label}</b><span className="muted">{item.detail}</span></span><span aria-hidden="true">→</span>
+        </Link>)}
+        <div className="actions"><button className="btn" onClick={() => setIssue(null)}>Close</button></div>
+      </Modal>}
     </>
   )
 }
@@ -136,6 +253,9 @@ function BoardSummary({ onClose }: { onClose: () => void }) {
           <h2 style={{ marginTop: 14, fontSize: 13 }}>Canary failures</h2>
           {b.canary_failures.map((c: string) => <p key={c}>{c}</p>)}
           {!b.canary_failures.length && <p className="muted">None.</p>}
+          <p className="muted">{b.failed_deliveries} failed deliveries · {b.pending_confirmations === undefined
+            ? `${b.overdue_confirmations} ownership confirmations needing action`
+            : `${b.pending_confirmations} pending confirmations · ${b.overdue_confirmations} overdue confirmations`} · {b.open_findings} open operational findings</p>
         </>
       )}
       <div className="actions"><button className="btn" onClick={onClose}>Close</button></div>
@@ -177,12 +297,17 @@ function AuditLog() {
 function Notifications() {
   const { data: ns, error } = useApi('/notifications')
   const { data: people } = useApi('/people')
+  const [params] = useSearchParams()
+  const focus = Number(params.get('notification')) || null
   const [f, setF] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (ns && focus) requestAnimationFrame(() => document.getElementById(`notification-${focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }, [ns, focus])
   if (!ns || !people) return <Loading error={error} />
   const name = (id: number | null) => people.find((p: any) => p.id === id)?.name || '—'
   const set = (k: string) => (v: string) => setF((x) => ({ ...x, [k]: v }))
-  const shown = ns.filter((n: any) => has(f.q || '', n.message, name(n.person_id), n.kind) && (!f.kind || n.kind === f.kind)
-    && (!f.delivered || (f.delivered === 'yes') === n.delivered))
+  const shown = ns.filter((n: any) => n.id === focus || (has(f.q || '', n.message, name(n.person_id), n.kind) && (!f.kind || n.kind === f.kind)
+    && (!f.delivered || (f.delivered === 'yes') === n.delivered)))
   return (
     <>
       <Controls q={f.q || ''} setQ={set('q')} shown={shown.length} total={ns.length} onClear={() => setF({})} selects={[
@@ -191,7 +316,7 @@ function Notifications() {
       <div className="card" style={{ marginTop: 14 }}>
         <table><thead><tr><th>When</th><th>To</th><th>Type</th><th>Message</th><th>Delivered</th></tr></thead><tbody>
           {shown.map((n: any) => (
-            <tr key={n.id}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(n.created_at, true)}</td><td>{name(n.person_id)}</td>
+            <tr key={n.id} id={`notification-${n.id}`} className={n.id === focus ? 'hl' : ''}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(n.created_at, true)}</td><td>{name(n.person_id)}</td>
               <td>{n.kind.replace(/_/g, ' ')}</td><td className="muted">{n.message}</td>
               <td>{n.delivered ? <Badge kind="info">✓</Badge> : <Badge kind="over">✕ failed</Badge>}</td></tr>))}
           {!shown.length && <tr><td colSpan={5} className="muted">No notifications match.</td></tr>}</tbody></table>

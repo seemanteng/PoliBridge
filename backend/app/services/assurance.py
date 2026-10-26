@@ -2,7 +2,7 @@
 risk-acceptance reopen (D5), canaries (F3), dashboard and oversight summaries."""
 from datetime import timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from ..clock import clock
 from ..config import TIMINGS
@@ -10,7 +10,7 @@ from ..models import (Claim, Dependency, Task, Obligation, RiskAcceptance, Asset
                       Notification, CanaryRun, AuditEvent, BoardItem, Source, FeedItem)
 from ..rules import applicability as A
 from . import audit
-from .common import notify, raise_finding, owner_validity, bu_head, first_with_role, people_with_role
+from .common import notify, raise_finding, owner_validity, bu_head, first_with_role, people_with_role, create_claim, add_dependency
 from .assignment import tick_all, reroute_task, create_task, OPEN_STATES, countdowns, route, is_overdue
 from .assessment import assess_asset
 from .closure import TERMINAL
@@ -21,6 +21,89 @@ def _reopen_obligation(db, ob_id):
     if ob and ob.status == "closed":
         ob.status, ob.closed_at = "open", None
         audit.log(db, "system", "obligation", ob.id, "reopened")
+
+
+def confirmation_due(db, asset: Asset):
+    """Due date for the current owner's confirmation, including changes made before this rule was added."""
+    if asset.ownership_attested_at:
+        return asset.ownership_attested_at + timedelta(days=TIMINGS["attestation_days"])
+    change = db.scalar(select(AuditEvent).where(
+        AuditEvent.entity == "asset", AuditEvent.entity_id == asset.id,
+        AuditEvent.action.in_(("owner_reassigned", "created"))).order_by(AuditEvent.ts.desc(), AuditEvent.id.desc()))
+    jml = db.scalar(select(AuditEvent).where(
+        AuditEvent.entity == "person", AuditEvent.entity_id == asset.owner_id,
+        AuditEvent.action.in_(("jml_leaver", "jml_mover"))).order_by(AuditEvent.ts.desc(), AuditEvent.id.desc())) if asset.owner_id else None
+    events = [e.ts for e in (change, jml) if e]
+    if events:
+        return max(events) + timedelta(days=TIMINGS["ownership_change_confirmation_days"])
+    old = db.scalar(select(Claim).where(
+        Claim.claim_type == "ownership", Claim.asset_id == asset.id,
+        Claim.status.in_(("expired", "superseded")), Claim.expiry.is_not(None))
+        .order_by(Claim.created_at.desc(), Claim.id.desc()))
+    return old.expiry if old else None
+
+
+def confirmation_state(db, asset: Asset) -> str:
+    due = confirmation_due(db, asset)
+    if asset.ownership_attested_at:
+        return "overdue" if due and due <= clock.now() else "current"
+    if due is None:
+        return "unscheduled"
+    return "overdue" if due <= clock.now() else "awaiting"
+
+
+def renewal_source(db, task: Task) -> Claim | None:
+    """The expired monitoring claim behind a Component 6 renewal task."""
+    ob = db.get(Obligation, task.obligation_id)
+    asset = db.get(Asset, task.asset_id)
+    if not ob or not asset or ob.kind != "policy" or ob.title != f"Renew {task.component or 'monitoring control'} for {asset.name}":
+        return None
+    return db.scalar(select(Claim).where(
+        Claim.claim_type == "monitoring", Claim.asset_id == asset.id,
+        Claim.component == task.component, Claim.status == "expired")
+        .order_by(Claim.expiry.desc(), Claim.id.desc()))
+
+
+def check_renewal_evidence(task: Task, asset: Asset, old: Claim, *, purpose, asset_name, component,
+                           scope, method, timestamp, submitter_id) -> list[str]:
+    """A monitoring renewal checks the recorded control, rather than software directories or versions."""
+    missing = [name for name, value in (("asset", asset_name), ("component", component), ("scope", scope),
+                                         ("method", method), ("timestamp", timestamp),
+                                         ("submitter", submitter_id)) if not value]
+    if missing:
+        return [f"E4: evidence incomplete, missing {', '.join(missing)}"]
+    reasons = []
+    if purpose != "remediation":
+        reasons.append("E1: monitoring renewal requires remediation evidence")
+    if asset_name != asset.name or component != task.component:
+        reasons.append(f"E1: evidence must identify {task.component} on {asset.name}")
+    missing_scope = [entry for entry in old.evidence_scope or [] if entry not in scope]
+    if missing_scope:
+        reasons.append("E1: evidence scope must include " + ", ".join(missing_scope))
+    if method != old.verification_method:
+        reasons.append(f"E1: use {old.verification_method.replace('_', ' ')} to verify this control")
+    if not task.fixed_at:
+        reasons.append("E2: mark the control renewed before submitting evidence")
+    elif timestamp < task.fixed_at:
+        reasons.append("E2: evidence predates the reported renewal")
+    if timestamp > clock.now() + timedelta(minutes=5):
+        reasons.append("E2: evidence timestamp is in the future")
+    return reasons
+
+
+def complete_renewal(db, task: Task, evidence, reviewer: Person, old: Claim):
+    """Replace expired monitoring coverage after independent evidence review."""
+    cycle = max(old.expiry - old.evidence_ts, timedelta(days=1)) if old.expiry and old.evidence_ts else timedelta(days=30)
+    expiry = max(clock.now(), evidence.timestamp) + cycle
+    claim = create_claim(
+        db, actor=reviewer.directory_id, claim_type="monitoring", asset_id=task.asset_id,
+        component=task.component, value="in_effect", statement=old.statement,
+        evidence_scope=evidence.scope, verification_method=evidence.method, evidence_ts=evidence.timestamp,
+        submitter_id=evidence.submitter_id, reviewer_id=reviewer.id, owner_id=task.owner_id, expiry=expiry)
+    add_dependency(db, claim, "task", task.id)
+    evidence.claim_id = claim.id
+    task.status, task.disposition, task.closed_at = "closed", "remediated", clock.now()
+    audit.log(db, "system", "task", task.id, "monitoring_renewed", claim_id=claim.id, next_review=expiry.isoformat())
 
 
 def expire_claims(db) -> list[Claim]:
@@ -103,6 +186,11 @@ def _type_specific(db, c: Claim):
         raise_finding(db, "lapsed_monitoring", "High", f"{asset.name}: {c.statement}",
                       "Monitoring control evidence (certificate/configuration) has expired",
                       assigned_to=owner or first_with_role(db, "ciso"))
+        reopened = next((db.get(Task, dep.dependent_id) for dep in db.scalars(
+            select(Dependency).where(Dependency.claim_id == c.id, Dependency.dependent_type == "task"))
+            if db.get(Task, dep.dependent_id) and renewal_source(db, db.get(Task, dep.dependent_id))), None)
+        if reopened and reopened.status in OPEN_STATES:
+            return  # this task reopened when its renewed claim expired; avoid a duplicate assignment
         ob = Obligation(kind="policy", title=f"Renew {c.component or 'monitoring control'} for {asset.name}",
                         status="open", impact="High", created_at=clock.now(),
                         required_action="Renew the certificate/configuration and submit evidence")
@@ -179,8 +267,11 @@ def run_canary(db, asset: Asset) -> CanaryRun:
     if not ok:
         failures.append(f"not routed to a valid named owner: {why}")
     owner = db.get(Person, task.owner_id) if task.owner_id else None
-    if owner is None or not (owner.active and owner.deliverable):
-        failures.append("recipient cannot receive notifications")
+    delivered_assignment = db.scalar(select(Notification.id).where(
+        Notification.task_id == task.id, Notification.kind == "assign",
+        Notification.person_id == task.owner_id, Notification.delivered.is_(True)))
+    if owner is None or not delivered_assignment:
+        failures.append("test assignment was not delivered to the named owner")
     mgr = db.get(Person, owner.manager_id) if owner and owner.manager_id else None
     if mgr is None or not mgr.active:
         failures.append("no active manager for escalation")
@@ -220,10 +311,14 @@ def evaluate_canaries(db):
             continue
         failures = []
         if task.acknowledged_at is None:
-            sent = db.scalar(select(Notification.id).where(Notification.task_id == task.id,
-                                                           Notification.kind == "escalate_manager"))
-            if not sent:
-                failures.append("unacknowledged canary did not escalate to the manager on schedule")
+            owner = db.get(Person, task.owner_id) if task.owner_id else None
+            manager = db.get(Person, owner.manager_id) if owner and owner.manager_id else None
+            delivered = db.scalar(select(Notification.id).where(
+                Notification.task_id == task.id, Notification.kind == "escalate_manager",
+                Notification.person_id == (manager.id if manager else -1),
+                Notification.delivered.is_(True)))
+            if not delivered:
+                failures.append("unacknowledged canary did not reach the named owner's manager")
         if failures:
             _finish_if_decided(db, run, task, failures)
         else:
@@ -244,6 +339,13 @@ def dashboard(db) -> dict:
     lapsed = [c for c in expired if c.claim_type == "monitoring"]
     runs = db.scalars(select(CanaryRun)).all()
     done = [r for r in runs if r.status != "running"]
+    failed_deliveries = db.scalar(select(func.count(Notification.id)).where(
+        Notification.delivered.is_(False),
+        or_(Notification.task_id.is_(None),
+            ~Notification.task_id.in_(select(Task.id).where(Task.is_test.is_(True))))))
+    confirmation_states = [confirmation_state(db, a) for a in db.scalars(select(Asset))]
+    overdue_confirmations = confirmation_states.count("overdue")
+    pending_confirmations = sum(state in ("awaiting", "unscheduled") for state in confirmation_states)
     return {
         "overdue_tasks": len(overdue),
         "open_tasks": len(live),
@@ -251,8 +353,12 @@ def dashboard(db) -> dict:
         "cannot_determine": len(cd),
         "accepted_risks": len(accepted),
         "expired_evidence": len(expired),
+        "failed_deliveries": failed_deliveries,
+        "pending_confirmations": pending_confirmations,
+        "overdue_confirmations": overdue_confirmations,
         "lapsed_monitoring": len(lapsed),
-        "open_findings": db.scalar(select(func.count(Finding.id)).where(Finding.status == "open")),
+        "open_findings": db.scalar(select(func.count(Finding.id)).where(
+            Finding.status == "open", Finding.is_test.is_(False), Finding.kind != "canary_failure")),
         "board_items": sum(t.board_flag for t in db.scalars(select(Task).where(Task.is_test == False))),  # noqa: E712
         "canary": {"runs": len(done), "passed": sum(r.status == "passed" for r in done),
                    "pass_rate": round(sum(r.status == "passed" for r in done) / len(done), 2) if done else None},
@@ -264,6 +370,10 @@ def oversight_summary(db) -> dict:
     d = dashboard(db)
     flagged = [t for t in db.scalars(select(Task).where(Task.board_flag == True, Task.is_test == False))]  # noqa: E712
     return {"period_end": str(clock.now()), "headline": d,
+            "failed_deliveries": d["failed_deliveries"],
+            "pending_confirmations": d["pending_confirmations"],
+            "overdue_confirmations": d["overdue_confirmations"],
+            "open_findings": d["open_findings"],
             "board_risk_items": [{"task": t.id, "asset": db.get(Asset, t.asset_id).name, "impact": t.impact,
                                   "status": t.status, "remediate_due": str(t.remediate_due)} for t in flagged],
             "accepted_risks": [{"id": r.id, "task": r.task_id, "expiry": str(r.expiry)}

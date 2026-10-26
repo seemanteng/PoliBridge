@@ -644,7 +644,7 @@ def risk_approve(rid: int, db=Depends(get_db), me=Depends(actor)):
 
 @router.get("/notifications")
 def notifications(db=Depends(get_db)):
-    return sers(db.scalars(select(M.Notification).order_by(M.Notification.id.desc()).limit(200)))
+    return sers(db.scalars(select(M.Notification).order_by(M.Notification.id.desc())))
 
 
 # ---------- assurance (C6) ----------

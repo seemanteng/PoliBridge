@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, Loading, Modal, useAction } from '../ui'
@@ -74,7 +74,7 @@ function RemoveModal({ person, onClose }: { person: any; onClose: () => void }) 
         : <p className="muted">They own no systems, so nothing else is affected.</p>}
       {error && <p className="err">{error}</p>}
       <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" style={{ background: 'var(--red)', borderColor: 'var(--red)' }} disabled={busy} onClick={go}>Remove</button></div>
+        <button className="btn danger-solid" disabled={busy} onClick={go}>Remove</button></div>
     </Modal>
   )
 }
@@ -158,13 +158,13 @@ function OwnerControls({ a, people }: { a: any; people: any[] }) {
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
       <div className="faint">Ownership</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-        <select style={{ width: 'auto', minWidth: 200 }} value={pick} onChange={(e) => setPick(e.target.value)}><option value="">Reassign owner to…</option>
+      <div className="inline-actions">
+        <select value={pick} onChange={(e) => setPick(e.target.value)}><option value="">Reassign owner to…</option>
           {people.filter((p) => p.active && p.name !== a.owner).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
         <button className="btn sm" disabled={busy || !pick} onClick={() => run(async () => { await api.post(`/registry/assets/${a.id}/owner`, { owner_id: Number(pick) }); setPick(''); refreshAll() })}>Reassign</button>
         {(!a.owner_valid || a.attestation.state === 'due_soon') && a.owner_active && <button className="btn sm primary" disabled={busy} onClick={() => run(async () => { await api.post(`/assets/${a.id}/attest`); refreshAll() })}>{a.owner_valid ? 'Re-attest ownership' : 'Attest ownership'}</button>}
       </div>
-      {!a.owner_valid && <p className="faint" style={{ marginTop: 4 }}>The new owner must attest. Switch to them in the sidebar, then click Attest ownership.</p>}
+      {!a.owner_valid && <p className="faint" style={{ marginTop: 4 }}>Record the new owner's confirmation with Attest ownership.</p>}
       {error && <p className="err">{error}</p>}
     </div>
   )
@@ -187,11 +187,11 @@ function VersionControls({ a }: { a: any }) {
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
       <div className="faint">Record a version change</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-        <input list={`comps-${a.id}`} style={{ width: 'auto', minWidth: 160 }} placeholder="Component" value={f.name} onChange={(e) => set('name', e.target.value)} />
+      <div className="inline-actions">
+        <input list={`comps-${a.id}`} placeholder="Component" value={f.name} onChange={(e) => set('name', e.target.value)} />
         <datalist id={`comps-${a.id}`}>{a.components.map((c: any) => <option key={c.name} value={c.name} />)}</datalist>
-        <input style={{ width: 110 }} placeholder="New version" value={f.version} onChange={(e) => set('version', e.target.value)} />
-        <input style={{ width: 'auto', minWidth: 160, flex: 1 }} placeholder="Note (optional)" value={f.note} onChange={(e) => set('note', e.target.value)} />
+        <input className="version-input" placeholder="New version" value={f.version} onChange={(e) => set('version', e.target.value)} />
+        <input placeholder="Note (optional)" value={f.note} onChange={(e) => set('note', e.target.value)} />
         <button className="btn sm" disabled={busy || !f.name.trim() || !f.version.trim()} onClick={go}>Record</button>
       </div>
       <p className="faint" style={{ marginTop: 4 }}>Fixes for a flagged advisory are recorded through remediation evidence on the task, so they are independently reviewed.</p>
@@ -219,22 +219,22 @@ function MailingList({ a, people }: { a: any; people: any[] }) {
         {a.mailing_list.map((m: any) => <tr key={m.id}>
           <td><b>{m.name}</b><div className="faint mono">{m.directory_id}{m.title ? ` · ${m.title}` : ''}</div></td>
           <td>{editing?.id === m.id
-            ? <input value={editing.stake} onChange={(e) => setEditing({ id: m.id, stake: e.target.value })} />
+            ? <input value={editing?.stake || ''} onChange={(e) => setEditing({ id: m.id, stake: e.target.value })} />
             : m.stake || <span className="faint">—</span>}</td>
           <td><Badge kind={LIST_STATUS[m.status][0]}>{LIST_STATUS[m.status][1]}</Badge></td>
           <td style={{ whiteSpace: 'nowrap' }}>{editing?.id === m.id
-            ? <><button className="btn sm primary" disabled={busy} onClick={() => run(async () => { await api.patch(`/registry/mailing-list/${m.id}`, { stake: editing.stake }); setEditing(null); refreshAll() })}>Save</button>{' '}
+            ? <><button className="btn sm primary" disabled={busy} onClick={() => run(async () => { await api.patch(`/registry/mailing-list/${m.id}`, { stake: editing?.stake || '' }); setEditing(null); refreshAll() })}>Save</button>{' '}
                 <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button></>
             : <><button className="btn sm" onClick={() => setEditing({ id: m.id, stake: m.stake || '' })}>Edit</button>{' '}
                 <button className="btn sm danger" disabled={busy} onClick={() => run(async () => { await api.del(`/registry/mailing-list/${m.id}`); refreshAll() })}>Remove</button></>}</td></tr>)}
         {!a.mailing_list.length && <tr><td colSpan={4} className="muted">Nobody is on this system's mailing list yet.</td></tr>}</tbody></table>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-        <select style={{ width: 'auto', minWidth: 200 }} value={add.person} onChange={(e) => setAdd({ ...add, person: e.target.value })}><option value="">Add a stakeholder…</option>
+      <div className="inline-actions">
+        <select value={add.person} onChange={(e) => setAdd({ ...add, person: e.target.value })}><option value="">Add a stakeholder…</option>
           {people.filter((p) => p.active && !listed.has(p.id)).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.title || ROLE[p.role]}</option>)}</select>
-        <input style={{ width: 'auto', minWidth: 180, flex: 1 }} placeholder="Stake, e.g. Business user" value={add.stake} onChange={(e) => setAdd({ ...add, stake: e.target.value })} />
+        <input placeholder="Stake, e.g. Business user" value={add.stake} onChange={(e) => setAdd({ ...add, stake: e.target.value })} />
         <button className="btn sm" disabled={busy || !add.person} onClick={() => run(async () => { await api.post(`/registry/assets/${a.id}/mailing-list`, { person_id: Number(add.person), stake: add.stake }); setAdd({ person: '', stake: '' }); refreshAll() })}>Add</button>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+      <div className="inline-actions">
         <button className="btn sm" disabled={busy} onClick={() => run(async () => { setPreview((await api.get(`/registry/assets/${a.id}/summary`)).summary) })}>Preview summary</button>
         <button className="btn sm primary" disabled={busy || !reachable} onClick={() => run(async () => { setResult(await api.post(`/registry/assets/${a.id}/mailing-list/broadcast`)); setPreview(null); refreshAll() })}>Send summary to {reachable} active member{reachable === 1 ? '' : 's'}</button>
         <span className="faint">{a.last_summary_at ? `last sent ${fmt(a.last_summary_at)}` : 'no summary sent yet'}</span>
@@ -247,42 +247,53 @@ function MailingList({ a, people }: { a: any; people: any[] }) {
   )
 }
 
-function System({ a, people, onEdit }: { a: any; people: any[]; onEdit: () => void }) {
+function System({ a, people, onEdit, focused = false }: { a: any; people: any[]; onEdit: () => void; focused?: boolean }) {
   const inv = a.inventory
+  const details = useRef<HTMLDetailsElement>(null)
+  useEffect(() => { if (focused && details.current) details.current.open = true }, [focused])
   return (
-    <details className="card" style={{ marginTop: 14 }}>
-      <summary className="sec" style={{ cursor: 'pointer' }}><div><h2><span className="chev">▸</span>{a.name}</h2>
+    <details ref={details} id={`asset-${a.id}`} className={`card system-card ${focused ? 'focus-record' : ''}`}>
+      <summary className="system-summary"><div className="system-summary-main"><h2><span className="chev">▸</span>{a.name}</h2>
         <div className="faint">{[a.internet_facing && 'Internet-facing', a.critical && 'Critical', a.customer_facing && 'Customer-facing', a.data_sensitivity].filter(Boolean).join(' · ')}
           {' · '}{a.owner || 'no named owner'} · {a.open_tasks.length} open task{a.open_tasks.length === 1 ? '' : 's'} · {a.claims.length} claim{a.claims.length === 1 ? '' : 's'}</div></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="system-summary-actions">
           {a.attestation.state === 'due_soon' && <Badge kind="cd">attestation due soon</Badge>}
           {a.updates_needed > 0 && <Badge kind="over">{a.updates_needed} update{a.updates_needed > 1 ? 's' : ''} needed</Badge>}
           <Badge kind={a.owner_valid ? 'info' : 'over'}>{a.owner_valid ? 'ownership valid' : 'ownership invalid'}</Badge>
           {/* keep the click from toggling the section */}
           <button className="btn sm" onClick={(e) => { e.preventDefault(); onEdit() }}>Edit</button></div></summary>
-      <div style={{ marginTop: 8 }}>
-        <div>
+      <div className="system-overview">
+        <div className="system-panel">
           <div className="faint">Accountability chain (who gets routed and escalated to)</div>
           <p style={{ margin: '4px 0' }}>
             <b style={a.owner_active ? {} : { textDecoration: 'line-through' }}>{a.owner || 'no named owner'}</b> → {a.manager || '—'} → {a.bu_head || '—'}
           </p>
+          <Link className="btn sm" to={a.owner_id ? `/registry?tab=People&person=${a.owner_id}` : '/registry?tab=People'}>
+            {a.owner_id ? `Check ${a.owner}'s people record` : 'Open people directory'}
+          </Link>
           {a.owner_issue && <p className="err" style={{ margin: 0 }}>{a.owner_issue}{a.legacy_contact ? ` · legacy contact: ${a.legacy_contact}` : ''}</p>}
           <div className="faint" style={{ marginTop: 8 }}>Business unit</div><div>{a.business_unit || '—'}</div>
           <div className="faint" style={{ marginTop: 8 }}>Ownership attested (quarterly)</div>
           <div>{a.ownership_attested_at ? fmt(a.ownership_attested_at) : 'never'}
             {a.attestation.due && <> · {a.attestation.state === 'lapsed' ? 'lapsed' : 'next due'} {fmt(a.attestation.due)}</>}
             {a.attestation.state === 'due_soon' && <> <Badge kind="cd">due soon</Badge></>}</div>
+          {a.confirmation && ['awaiting', 'overdue', 'unscheduled'].includes(a.confirmation.state) &&
+            <p className={a.confirmation.state === 'overdue' ? 'err' : 'muted'} style={{ margin: '6px 0 0' }}>
+              {a.confirmation.state === 'overdue' ? `Owner confirmation overdue since ${fmt(a.confirmation.due, true)}`
+                : a.confirmation.due ? `New owner must confirm by ${fmt(a.confirmation.due, true)}`
+                  : 'Owner confirmation needs a due date'}
+            </p>}
           {!a.in_scanner_targets && <p className="err">Not in scanner targets (coverage gap)</p>}
           <OwnerControls a={a} people={people} />
         </div>
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+        <div className="system-panel">
           <div className="faint">Component inventory <Badge kind={inv.state === 'current' ? 'info' : 'over'}>inventory {inv.state}</Badge></div>
           <div>{inv.verified_at ? <>verified {fmt(inv.verified_at)} · {inv.method?.replace(/_/g, ' ')}</> : 'never verified'}</div>
           {inv.verified_at && <div className="faint">{inv.scope.join(', ')}</div>}
           <VersionControls a={a} />
         </div>
       </div>
-      <div style={{ marginTop: 14 }}><div className="faint">Components</div>
+      <div className="system-data-section"><h3>Components</h3>
         <table style={{ marginTop: 4 }}><thead><tr><th>Component</th><th>Version on record</th><th>Install path</th><th>Update status</th></tr></thead><tbody>
           {a.components.map((c: any) => <tr key={c.name}><td>{c.name}</td><td className="mono">{c.version}</td><td className="mono faint">{c.path || '—'}</td>
             <td>{c.advisories.length
@@ -291,19 +302,19 @@ function System({ a, people, onEdit }: { a: any; people: any[]; onEdit: () => vo
                     <Link to={`/acknowledgements/${x.advisory_id}`}>{x.cve}</Link>{x.kev ? ' (known exploited)' : ''}</span>)}</div></>
               : <Badge kind="ok">no known update needed</Badge>}</td></tr>)}
           {!a.components.length && <tr><td colSpan={4} className="muted">No component data on record, so PoliBridge cannot tell whether an update is needed.</td></tr>}</tbody></table></div>
-      <div style={{ marginTop: 14 }}><div className="faint">Version audit log</div>
+      <div className="system-data-section"><h3>Version audit log</h3>
         <table style={{ marginTop: 4 }}><thead><tr><th>When</th><th>Component</th><th>Change</th><th>Recorded by</th><th>Source</th><th>Note</th></tr></thead><tbody>
           {a.version_history.map((h: any, i: number) => <tr key={h.id ?? `base-${i}`}><td style={{ whiteSpace: 'nowrap' }}>{h.ts ? fmt(h.ts) : 'before log began'}</td>
             <td>{h.component}</td>
             <td className="mono">{h.from === null ? <>added at {h.to}</> : h.to === null ? <>removed ({h.from})</> : <>{h.from} → {h.to}</>}</td>
             <td>{h.actor_name ? <>{h.actor_name}<div className="faint mono">{h.actor}</div></> : h.actor}</td><td>{SOURCE[h.source] || h.source.replace(/_/g, ' ')}</td><td className="faint">{h.note || '—'}</td></tr>)}
           {!a.version_history.length && <tr><td colSpan={6} className="muted">No versions recorded yet.</td></tr>}</tbody></table></div>
-      <div style={{ marginTop: 14 }}><div className="faint">Open tasks</div>
+      <div className="system-data-section"><h3>Open tasks</h3>
         <table style={{ marginTop: 4 }}><thead><tr><th>Task</th><th>Type</th><th>Impact</th><th>Status</th><th>Assigned to</th></tr></thead><tbody>
           {a.open_tasks.map((t: any) => <tr key={t.id}><td><Link to={`/remediations/${t.id}`}>{t.ref}</Link></td><td>{t.kind}</td><td>{t.impact || '—'}</td>
             <td>{t.status.replace(/_/g, ' ')}</td><td>{t.owner || '—'}</td></tr>)}
           {!a.open_tasks.length && <tr><td colSpan={5} className="muted">No open tasks.</td></tr>}</tbody></table></div>
-      <div style={{ marginTop: 14 }}><div className="faint">Claims</div>
+      <div className="system-data-section"><h3>Claims</h3>
         <table style={{ marginTop: 4 }}><thead><tr><th>Claim</th><th>Value</th><th>Status</th></tr></thead><tbody>
           {a.claims.map((c: any) => <tr key={c.id}><td><Link to={`/claims/${c.id}`}>{c.type}</Link></td><td>{c.value?.replace(/_/g, ' ') || '—'}</td>
             <td><Badge kind={c.status === 'active' ? 'info' : 'over'}>{c.status}</Badge></td></tr>)}
@@ -318,6 +329,12 @@ export default function Registry() {
   // the tab lives in the URL, so a refresh or a shared link comes back to the same place
   const [params, setParams] = useSearchParams()
   const tab = TABS.find((t) => t === params.get('tab')) || 'People'
+  const focusAsset = Number(params.get('asset')) || null
+  const focusPerson = Number(params.get('person')) || null
+  useEffect(() => {
+    const id = tab === 'Systems' && focusAsset ? `asset-${focusAsset}` : tab === 'People' && focusPerson ? `person-${focusPerson}` : null
+    if (id && r) requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }, [tab, focusAsset, focusPerson, r])
   const setTab = (t: (typeof TABS)[number]) => setParams(t === 'People' ? {} : { tab: t })
   // search text and filters are kept per tab, so switching tabs does not lose them
   const [f, setF] = useState<Record<string, string>>({})
@@ -333,18 +350,18 @@ export default function Registry() {
   const q = g('q')
   const units = uniq(r.business_units.map((b: any) => b.name))
 
-  const people = r.people.filter((p: any) => has(q, p.name, p.email, p.directory_id, p.title, ROLE[p.role], p.manager, p.business_unit, p.owns.join(' '))
+  const people = r.people.filter((p: any) => p.id === focusPerson || (has(q, p.name, p.email, p.directory_id, p.title, ROLE[p.role], p.manager, p.business_unit, p.owns.join(' '))
     && (!g('bu') || p.business_unit === g('bu')) && (!g('role') || p.role === g('role'))
-    && (!g('status') || (g('status') === 'active' ? p.active && p.deliverable : g('status') === 'left' ? !p.active : p.active && !p.deliverable)))
+    && (!g('status') || (g('status') === 'active' ? p.active && p.deliverable : g('status') === 'left' ? !p.active : p.active && !p.deliverable))))
 
-  const assets = r.assets.filter((a: any) => has(q, a.name, a.owner, a.manager, a.bu_head, a.business_unit, a.legacy_contact,
+  const assets = r.assets.filter((a: any) => a.id === focusAsset || (has(q, a.name, a.owner, a.manager, a.bu_head, a.business_unit, a.legacy_contact,
       a.components.map((c: any) => `${c.name} ${c.version}`).join(' '), a.open_tasks.map((t: any) => t.ref).join(' '))
     && (!g('bu') || a.business_unit === g('bu'))
     && (!g('owner') || (g('owner') === 'valid') === a.owner_valid)
     && (!g('inv') || a.inventory.state === g('inv'))
     && (!g('exposure') || (g('exposure') === 'internet' ? a.internet_facing : a.critical))
     && (!g('work') || (g('work') === 'tasks' ? a.open_tasks.length > 0 : a.open_tasks.length === 0))
-    && (!g('updates') || (g('updates') === 'needed') === a.updates_needed > 0))
+    && (!g('updates') || (g('updates') === 'needed') === a.updates_needed > 0)))
   const outdated = r.assets.filter((a: any) => a.updates_needed > 0)
 
   const bus = r.business_units.filter((b: any) => has(q, b.name, b.head) && (!g('bu') || b.name === g('bu')))
@@ -364,14 +381,15 @@ export default function Registry() {
     <>
       <div className="head"><div><h1>Registry</h1>
         <p className="muted" style={{ maxWidth: 760 }}>Who is accountable for what: staff, reporting lines, departments and systems, linked to their components, tasks and claims. Owners are directory identities, never email addresses.</p></div>
-        <div className="card" style={{ minWidth: 200 }}><div className="faint">Estate</div>
+        <div className="card registry-estate"><div className="faint">Estate</div>
           <div className="stat">{r.assets.length} systems · {active} staff</div></div></div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>{TABS.map((t) => (
-        <button key={t} className={`btn ${tab === t ? 'primary' : ''}`} onClick={() => setTab(t)}>{t}{t === 'Findings' ? ` (${r.findings.length})` : ''}</button>))}</div>
+      <div className="registry-topbar">
+        <div className="tabs" role="group" aria-label="Registry sections">{TABS.map((t) => (
+          <button key={t} className={`btn ${tab === t ? 'primary' : ''}`} aria-pressed={tab === t} onClick={() => setTab(t)}>{t}{t === 'Findings' ? ` (${r.findings.length})` : ''}</button>))}</div>
+      </div>
 
       {tab === 'Systems' && <>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn primary" onClick={() => setEditSys({})}>Add system</button></div>
-        <Controls {...common} shown={assets.length} total={r.assets.length} selects={[
+        <Controls {...common} shown={assets.length} total={r.assets.length} action={<button className="btn primary" onClick={() => setEditSys({})}>Add system</button>} selects={[
           { label: 'Department', value: g('bu'), set: set('bu'), options: units },
           { label: 'Ownership', value: g('owner'), set: set('owner'), options: [['valid', 'Valid'], ['invalid', 'Invalid']] },
           { label: 'Inventory', value: g('inv'), set: set('inv'), options: [['current', 'Current'], ['stale', 'Stale'], ['none', 'None']] },
@@ -384,12 +402,12 @@ export default function Registry() {
             .map((c: any) => `${c.name} ${c.version} → ${c.update_to || 'fixed release'}`).join(', ')})`).join(' · ')}</p>
           {g('updates') !== 'needed' && <button className="btn sm" style={{ marginTop: 8 }} onClick={() => set('updates')('needed')}>Show only these</button>}</div>}
         <OwnershipMap assets={assets} />
-        {assets.map((a: any) => <System key={a.id} a={a} people={r.people} onEdit={() => setEditSys(a)} />)}
+        {assets.map((a: any) => <System key={`${a.id}-${a.id === focusAsset}`} a={a} people={r.people}
+          focused={a.id === focusAsset} onEdit={() => setEditSys(a)} />)}
         {!assets.length && <p className="muted" style={{ marginTop: 14 }}>No systems match.</p>}</>}
 
       {tab === 'Organisations' && <>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn primary" onClick={() => setEditDept({})}>Add department</button></div>
-        <Controls {...common} shown={bus.length} total={r.business_units.length} selects={[
+        <Controls {...common} shown={bus.length} total={r.business_units.length} action={<button className="btn primary" onClick={() => setEditDept({})}>Add department</button>} selects={[
           { label: 'Department', value: g('bu'), set: set('bu'), options: units }]} />
         <div className="card" style={{ marginTop: 14 }}><h2>Departments</h2>
           <table><thead><tr><th>Department</th><th>Head</th><th>People</th><th>Systems</th><th></th></tr></thead><tbody>
@@ -403,21 +421,21 @@ export default function Registry() {
           {show.size ? <OrgChart people={r.people} show={show} /> : <p className="muted">No people match.</p>}</div></>}
 
       {tab === 'People' && <>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn primary" onClick={() => setEditing({})}>Add person</button></div>
-        <Controls {...common} shown={people.length} total={r.people.length} selects={[
+        <Controls {...common} shown={people.length} total={r.people.length} action={<button className="btn primary" onClick={() => setEditing({})}>Add person</button>} selects={[
           { label: 'Department', value: g('bu'), set: set('bu'), options: units },
           { label: 'Role', value: g('role'), set: set('role'), options: uniq(r.people.map((p: any) => p.role)).map((x) => [x, ROLE[x] || x] as [string, string]) },
           { label: 'Status', value: g('status'), set: set('status'), options: [['active', 'Active'], ['left', 'Left'], ['undeliverable', 'Mail undeliverable']] }]} />
-        <div className="card" style={{ marginTop: 14 }}>
-          <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Reports to</th><th>Department</th><th>Owns / responsible for</th><th>Status</th><th></th></tr></thead><tbody>
-            {people.map((p: any) => <tr key={p.id}><td><b>{p.name}</b><div className="faint mono">{p.directory_id}</div></td>
-              <td className="mono" style={{ fontSize: 12 }}>{p.email || <span className="red">missing</span>}</td>
-              <td>{p.title || ROLE[p.role]}</td><td>{p.manager || 'Board of Directors'}</td><td>{p.business_unit}</td>
+        <div className="card registry-table-card" style={{ marginTop: 14 }}>
+          <div className="table-scroll"><table className="people-table"><thead><tr><th>Person</th><th>Position</th><th>Reports to</th><th>Owns / responsible for</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+            {people.map((p: any) => <tr key={p.id} id={`person-${p.id}`} className={p.id === focusPerson ? 'hl' : ''}><td><b>{p.name}</b><div className="faint mono">{p.directory_id}</div>
+              <div className="person-email">{p.email || <span className="red">missing email</span>}</div></td>
+              <td>{p.title || ROLE[p.role]}<div className="faint">{p.business_unit}</div></td>
+              <td>{p.manager || 'Board of Directors'}</td>
               <td>{p.owns.length ? <>owns {p.owns.join(', ')}</> : DUTY[p.role] || ROLE[p.role]}</td>
               <td>{p.active ? (p.deliverable ? <Badge kind="ok">active</Badge> : <Badge kind="over">mail undeliverable</Badge>) : <Badge kind="over">left</Badge>}</td>
-              <td style={{ whiteSpace: 'nowrap' }}>{p.active && <><button className="btn sm" onClick={() => setEditing(p)}>Edit</button>{' '}
-                <button className="btn sm danger" onClick={() => setRemoving(p)}>Remove</button></>}</td></tr>)}
-            {!people.length && <tr><td colSpan={8} className="muted">No people match.</td></tr>}</tbody></table></div></>}
+              <td>{p.active && <div className="row-actions"><button className="btn sm" onClick={() => setEditing(p)}>Edit</button>
+                <button className="btn sm danger" onClick={() => setRemoving(p)}>Remove</button></div>}</td></tr>)}
+            {!people.length && <tr><td colSpan={6} className="muted">No people match.</td></tr>}</tbody></table></div></div></>}
 
       {tab === 'Findings' && <>
         <Controls {...common} shown={findings.length} total={r.findings.length} selects={[

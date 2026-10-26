@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 
 const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
-const UNIT_COLOURS = ['#2543a0', '#5b3aa8', '#9a3d0e', '#1f6b45', '#0f6b7a', '#a0306b', '#7a6a00']
+const UNIT_COLOURS = ['#315cbd', '#7352ae', '#a45d1a', '#25805a', '#1f7485', '#a84575', '#837319']
 
 function Box({ x, y, w, h, bar, dim, danger, title, children, onEnter, onLeave }: {
   x: number; y: number; w: number; h: number; bar: string; dim?: boolean; danger?: boolean; title?: string
@@ -101,15 +101,15 @@ export function OwnershipMap({ assets }: { assets: any[] }) {
         bar: a.owner_valid ? 'var(--green)' : 'var(--red)', tip: `${a.name}\n${a.owner_issue || 'ownership valid'}` })
       const ok = 'o:' + (a.owner || 'none' + a.id)
       if (!nodes.has(ok)) nodes.set(ok, { key: ok, col: 1, label: a.owner || 'No named owner', sub: a.owner_active ? 'directory identity' : a.owner ? 'left the organisation' : a.legacy_contact ? `legacy: ${a.legacy_contact}` : 'unowned',
-        y: 0, bad: !a.owner_active, bar: a.owner_active ? '#2543a0' : 'var(--red)', tip: a.owner_issue || a.owner || '' })
+        y: 0, bad: !a.owner_active, bar: a.owner_active ? 'var(--blue)' : 'var(--red)', tip: a.owner_issue || a.owner || '' })
       link(sk, ok, !a.owner_valid)
       if (a.manager) {
         const mk = 'm:' + a.manager
-        if (!nodes.has(mk)) nodes.set(mk, { key: mk, col: 2, label: a.manager, y: 0, bar: '#5b3aa8', tip: a.manager })
+        if (!nodes.has(mk)) nodes.set(mk, { key: mk, col: 2, label: a.manager, y: 0, bar: 'var(--purple)', tip: a.manager })
         link(ok, mk)
         if (a.bu_head) {
           const hk = 'h:' + a.bu_head
-          if (!nodes.has(hk)) nodes.set(hk, { key: hk, col: 3, label: a.bu_head, sub: a.business_unit, y: 0, bar: '#9a3d0e', tip: a.bu_head })
+          if (!nodes.has(hk)) nodes.set(hk, { key: hk, col: 3, label: a.bu_head, sub: a.business_unit, y: 0, bar: 'var(--orange)', tip: a.bu_head })
           link(mk, hk)
         }
       }

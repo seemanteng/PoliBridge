@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, refreshAll, useApi } from '../../api'
 import { Badge, Loading, useAction } from '../../ui'
-import { Counts, ReviewBadge, short, when } from './common'
+import { ActionMenu, Counts, ReviewBadge, short, when } from './common'
 import { NewVersionModal } from './NewVersion'
 
 const CHANGE: Record<string, [string, string]> = {
@@ -60,7 +60,7 @@ export default function Changes() {
   const to = params.get('version'), from = params.get('from')
   const q = [to && `to=${to}`, from && `from=${from}`].filter(Boolean).join('&')
   const { data: d, error } = useApi(`/sources/${sid}/compare${q ? `?${q}` : ''}`)
-  const { run, error: aerr, busy } = useAction()
+  const { run, error: aerr } = useAction()
   const [adding, setAdding] = useState(false)
   if (!d) return <Loading error={error} />
   const s = d.source
@@ -77,9 +77,10 @@ export default function Changes() {
       <div className="card" style={{ marginTop: 10 }}>
         <div className="sec"><div><h2 style={{ fontSize: 18 }}>{s.name}</h2>
           <p className="muted">{s.authority} · {s.jurisdiction} · owner {s.owner || 'nobody'} · <ReviewBadge review={s.review} /></p></div>
-          {s.status === 'approved' && <div style={{ display: 'flex', gap: 8, whiteSpace: 'nowrap' }}>
-            <button className="btn" disabled={busy} onClick={() => run(async () => { await api.post(`/sources/${s.id}/check`, {}); refreshAll() })}>Mark as reviewed</button>
-            <button className="btn primary" onClick={() => setAdding(true)}>Upload new version</button></div>}</div>
+          {s.status === 'approved' && <ActionMenu label={`Actions for ${s.name}`} items={[
+            { label: 'Mark as reviewed', onSelect: () => run(async () => { await api.post(`/sources/${s.id}/check`, {}); refreshAll() }) },
+            { label: 'Upload new version', onSelect: () => setAdding(true) },
+          ]} />}</div>
         <p className="muted" style={{ maxWidth: 780 }}>Compare regulatory and policy sources with previous versions and extract changed clauses with exact quotations and references. Words that were taken out are struck through in red; words that were added are highlighted in green.</p>
         {aerr && <p className="err">{aerr}</p>}
         {d.to && <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>

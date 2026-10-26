@@ -21,8 +21,8 @@ export default function Documents() {
     <>
       <div className="head"><div><h1>Documents</h1>
         <p className="muted" style={{ maxWidth: 760 }}>The laws, policies, contracts and security feeds the company has to follow. Only approved sources can create obligations.</p></div></div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>{TABS.map(([k, l]) => (
-        <button key={k} className={`btn ${tab[0] === k ? 'primary' : ''}`} onClick={() => setParams(k === 'sources' ? {} : { tab: k })}>{l}</button>))}</div>
+      <div className="tabs" role="group" aria-label="Document sections">{TABS.map(([k, l]) => (
+        <button key={k} className={`btn ${tab[0] === k ? 'primary' : ''}`} aria-pressed={tab[0] === k} onClick={() => setParams(k === 'sources' ? {} : { tab: k })}>{l}</button>))}</div>
       <View />
     </>
   )

@@ -196,6 +196,41 @@ def test_certificate_expiry_lapses_monitoring_claim(db, who):
     assert f and assurance.dashboard(db)["lapsed_monitoring"] == 1
 
 
+def test_monitoring_renewal_task_explains_scope_and_closes_after_review(db, who, asset):
+    from app.services import views
+    control = registry.register_monitoring_control(
+        db, asset("HR Intranet"), "WAF policy HR-01", who("ofoo"),
+        clock.now() + timedelta(days=1), method="configuration_review")
+    clock.advance(days=2)
+    assurance.sweep(db)
+    task = db.scalar(select(Task).where(Task.asset_id == control.asset_id,
+                                        Task.component == control.component,
+                                        Task.kind == "remediation"))
+    detail = views.task_detail(db, task)
+    assert detail["renewal"]["scope"] == ["config:WAF policy HR-01"]
+    assert "Patch" not in detail["summary"]
+    closure.mark_fixed(db, task, who("ofoo"))
+    rejected = closure.submit_evidence(
+        db, task, who("ofoo"), purpose="remediation", asset_name="HR Intranet",
+        component="WAF policy HR-01", scope=[], method="configuration_review", timestamp=clock.now())
+    assert rejected.status == "rejected" and "missing scope" in rejected.reasons[0]
+    accepted = closure.submit_evidence(
+        db, task, who("ofoo"), purpose="remediation", asset_name="HR Intranet",
+        component="WAF policy HR-01", scope=["config:WAF policy HR-01"],
+        method="configuration_review", timestamp=clock.now())
+    assert accepted.status == "pending"
+    closure.review_evidence(db, accepted, who("rverma"), True)
+    assert task.status == "closed" and accepted.claim_id
+    renewed = db.get(Claim, accepted.claim_id)
+    assert renewed.claim_type == "monitoring" and renewed.status == "active" and renewed.expiry > clock.now()
+    clock.set(renewed.expiry + timedelta(minutes=1))
+    assurance.sweep(db)
+    assert task.status == "reopened"
+    assert len(list(db.scalars(select(Task).where(Task.asset_id == control.asset_id,
+                                                  Task.component == control.component,
+                                                  Task.kind == "remediation")))) == 1
+
+
 def test_attestation_expiry_invalidates_owner_and_reroutes(db, who):
     ob = intake.ingest_advisory(db, **STRUTS)
     t = task_for(db, ob, "Credit Report Portal")
@@ -299,6 +334,70 @@ def test_canary_passes_when_escalation_fires(db, asset):
     assurance.sweep(db)
     db.refresh(run)
     assert run.status == "passed"
+
+
+def test_canary_fails_when_assignment_was_not_delivered(db, asset, who):
+    who("atan").deliverable = False
+    run = assurance.run_canary(db, asset("Credit Report Portal"))
+    assert run.status == "failed"
+    assert any("not delivered" in reason for reason in run.failures)
+    assert assurance.dashboard(db)["failed_deliveries"] == 0  # synthetic traffic is separate
+
+
+def test_canary_fails_when_manager_escalation_was_not_delivered(db, asset, who):
+    run = assurance.run_canary(db, asset("Credit Report Portal"))
+    assert run.status == "running"
+    who("mlee").deliverable = False
+    clock.advance(hours=25)
+    assurance.sweep(db)
+    assert run.status == "failed"
+    assert any("manager" in reason for reason in run.failures)
+
+
+def test_oversight_surfaces_delivery_and_confirmation_failures(db, asset, who):
+    from app.services import views
+    from app.services import audit
+    from app.services.common import notify
+    portal = asset("Credit Report Portal")
+    portal.ownership_attested_at = None
+    who("atan").deliverable = False
+    notify(db, person=who("atan"), kind="attestation_due", message="Reconfirm portal ownership")
+    audit.log(db, "pnair", "asset", portal.id, "mailing_list_added", person="atan")
+    report = views.oversight(db)
+    assert report["kpis"]["failed_deliveries"] >= 1
+    assert any(row["asset_id"] == portal.id for row in report["pending_confirmations"])
+    assert report["failed_deliveries"][0]["recipient"] == who("atan").name
+    assert report["mailing_list_changes"][0]["asset"] == portal.name
+    assert len(report["drilldowns"]["pending_confirmations"]) == report["kpis"]["pending_confirmations"]
+    assert len(report["drilldowns"]["overdue_confirmations"]) == report["kpis"]["overdue_confirmations"]
+    assert any(item["href"] == f"/registry?tab=Systems&asset={portal.id}"
+               for item in report["drilldowns"]["pending_confirmations"])
+    assert len(report["drilldowns"]["failed_deliveries"]) == report["kpis"]["failed_deliveries"]
+    for key in ("overdue_tasks", "cannot_determine", "accepted_risks", "expired_evidence", "lapsed_monitoring"):
+        assert len(report["drilldowns"][key]) == report["kpis"][key]
+
+
+def test_new_owner_confirmation_has_due_date_before_it_is_overdue(db, asset, who):
+    from app.services import audit, views
+    from app.config import TIMINGS
+    portal = asset("Credit Report Portal")
+    portal.owner_id = who("ofoo").id
+    portal.ownership_attested_at = None
+    audit.log(db, "dortiz", "asset", portal.id, "owner_reassigned", to="ofoo")
+    due = clock.now() + timedelta(days=TIMINGS["ownership_change_confirmation_days"])
+    assert assurance.confirmation_due(db, portal) == due
+    assert assurance.confirmation_state(db, portal) == "awaiting"
+    row = next(a for a in views.oversight(db)["pending_confirmations"] if a["asset_id"] == portal.id)
+    assert row["due"] == due.isoformat() and row["state"] == "awaiting"
+    assert all(a["asset_id"] != portal.id for a in views.oversight(db)["overdue_confirmations"])
+    clock.advance(days=TIMINGS["ownership_change_confirmation_days"], minutes=1)
+    assert assurance.confirmation_state(db, portal) == "overdue"
+    report = views.oversight(db)
+    assert any(a["asset_id"] == portal.id for a in report["overdue_confirmations"])
+    assert all(a["asset_id"] != portal.id for a in report["pending_confirmations"])
+    registry.attest_ownership(db, portal, who("ofoo"))
+    assert assurance.confirmation_state(db, portal) == "current"
+    assert all(a["asset_id"] != portal.id for a in views.oversight(db)["overdue_confirmations"])
 
 
 def test_canary_excluded_from_operational_metrics(db, asset):

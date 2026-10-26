@@ -57,7 +57,7 @@ function RejectModal({ g, onClose }: { g: any; onClose: () => void }) {
       <label>Reason</label><textarea rows={3} value={r} onChange={(e) => setR(e.target.value)} />
       {error && <p className="err">{error}</p>}
       <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={busy || !r.trim()} onClick={async () => { if (await run(async () => { await api.post(`/guidance/${g.id}/reject`, { reason: r }); refreshAll() })) onClose() }}>Reject</button></div>
+        <button className="btn danger-solid" disabled={busy || !r.trim()} onClick={async () => { if (await run(async () => { await api.post(`/guidance/${g.id}/reject`, { reason: r }); refreshAll() })) onClose() }}>Reject</button></div>
     </Modal>
   )
 }

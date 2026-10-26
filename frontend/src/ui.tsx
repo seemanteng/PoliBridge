@@ -5,11 +5,25 @@ export const Badge = ({ kind = '', children }: { kind?: string; children: ReactN
   <span className={`badge ${kind}`}>{children}</span>
 )
 
-const IMPACT: Record<string, [string, string]> = { High: ['imp-high', '▲▲▲'], Medium: ['imp-med', '▲▲'], Low: ['imp-low', '▲'] }
+const IMPACT: Record<string, string> = { High: 'imp-high', Medium: 'imp-med', Low: 'imp-low' }
 
 // Impact is how much it matters (High, Medium or Low). It drives the deadlines, so it is shown on every list.
 export const ImpactBadge = ({ impact, short = false }: { impact: string; short?: boolean }) => (
-  <Badge kind={IMPACT[impact]?.[0] || ''}>{IMPACT[impact]?.[1]} {impact}{short ? '' : ' impact'}</Badge>
+  <Badge kind={IMPACT[impact] || ''}>{impact}{short ? '' : ' impact'}</Badge>
+)
+
+export const TaskStatusBadge = ({ status }: { status: string }) => (
+  <Badge kind={status === 'closed' ? 'ok' : status === 'risk_accepted' ? 'info' :
+    status === 'reopened' ? 'over' : status === 'fixed_pending_review' ? 'cd' : ''}>
+    {status.replaceAll('_', ' ')}
+  </Badge>
+)
+
+export const TaskStatusPills = ({ status, overdue }: { status: string; overdue: boolean }) => (
+  <span className="status-pills">
+    {!(overdue && status === 'open') && <TaskStatusBadge status={status} />}
+    {overdue && <Badge kind="over">Overdue</Badge>}
+  </span>
 )
 
 export function StateBadge({ state }: { state: string }) {

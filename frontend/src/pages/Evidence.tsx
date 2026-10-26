@@ -8,7 +8,7 @@ export function EvidenceList({ embedded = false }: { embedded?: boolean }) {
   return (
     <>
       {!embedded && <h1>Evidence review</h1>}
-      <p className="muted">Every claim is held to the same standard as a fix: the evidence must have examined the component.</p>
+      <p className="muted">Evidence must cover the named component or monitoring control and be checked by an independent reviewer.</p>
       <div className="card" style={{ marginTop: 16 }}>
         <h2>What is this page?</h2>
         <p style={{ marginTop: 6 }}>When an owner says "we fixed it" or "this system does not use that software", that is only a <b>claim</b>. This is where the claim is checked
@@ -64,23 +64,23 @@ export function EvidenceReview() {
                 <td className={c.pass ? 'pass' : 'fail'}>{c.pass ? '✓ Pass' : '✕ Fail'}</td></tr>))}</tbody></table>
           {e.reasons.length > 0 && <ul className="muted" style={{ marginBottom: 0 }}>{e.reasons.map((r: string) => <li key={r}>{r}</li>)}</ul>}</div>
         <div>
-          <div className="card"><h2>What the scan actually examined</h2>
+          <div className="card"><h2>{e.renewal ? 'Monitoring control checked' : 'What the scan actually examined'}</h2>
             <div className="tree" style={{ marginTop: 10 }}>
-              {examined.length ? examined.map((s) => <div key={s}><div className="top"><span>{s}</span><span className="blue">{s.endsWith('/**') ? 'scanned · recursive' : 'scanned · depth 1'}</span></div></div>)
+              {examined.length ? examined.map((s) => <div key={s}><div className="top"><span>{s}</span><span className="blue">{e.renewal ? 'checked' : s.endsWith('/**') ? 'scanned · recursive' : 'scanned · depth 1'}</span></div></div>)
                 : <div className="top"><span>nothing recorded</span></div>}
               <div className="body">
-                {e.needed_paths.map((p: string) => <div key={p}>└ <span className={e.gaps.includes(p) ? 'red' : 'blue'}>{p}/…/{e.component}</span></div>)}
-                {e.gaps.length > 0 && <div className="faint" style={{ fontFamily: 'inherit' }}>Not examined — where the component lives</div>}</div></div>
-            <p className="muted" style={{ marginTop: 10 }}>A clean result here says nothing about {e.component}. Running a scan is not the same as checking the component.</p></div>
+                {e.needed_paths.map((p: string) => <div key={p}>└ <span className={e.gaps.includes(p) ? 'red' : 'blue'}>{e.renewal ? p : `${p}/…/${e.component}`}</span></div>)}
+                {e.gaps.length > 0 && <div className="faint" style={{ fontFamily: 'inherit' }}>{e.renewal ? 'Required control identifier missing' : 'Not examined — where the component lives'}</div>}</div></div>
+            <p className="muted" style={{ marginTop: 10 }}>{e.renewal ? 'The reviewer checks that this evidence covers the renewed control and was generated after the work.' : `A clean result here says nothing about ${e.component}. Running a scan is not the same as checking the component.`}</p></div>
         </div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}><h2>Reviewer decision</h2>
         <label>Reason recorded with the decision</label>
-        <textarea rows={3} value={comment} onChange={(ev) => setComment(ev.target.value)} placeholder="Say what is missing, e.g. an authenticated scan scoped to /opt/acis/**." />
+        <textarea rows={3} value={comment} onChange={(ev) => setComment(ev.target.value)} placeholder={e.renewal ? 'Say what is missing, e.g. a certificate check covering cert:SSLV-02.' : 'Say what is missing, e.g. an authenticated scan scoped to /opt/acis/**.'} />
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           {pending && <button className="btn primary" disabled={busy || !e.all_pass} onClick={() => decide('approve')}>Approve</button>}
-          <button className={`btn ${pending ? '' : 'primary'}`} disabled={busy || e.status === 'accepted'} onClick={() => decide('reject')}>{pending ? 'Reject' : 'Confirm rejection'}</button>
+          <button className={`btn ${pending ? 'danger' : 'danger-solid'}`} disabled={busy || e.status === 'accepted'} onClick={() => decide('reject')}>{pending ? 'Reject' : 'Confirm rejection'}</button>
           <button className="btn" disabled={busy} onClick={() => decide('request')}>Request specific evidence</button></div>
         {!e.all_pass && <p className="faint" style={{ marginTop: 8 }}>Approve is unavailable while any check fails.</p>}
         {aerr && <p className="err">{aerr}</p>}</div>

@@ -13,9 +13,9 @@ export default function Alerts() {
     <>
       <div className="head"><div><h1>Alerts</h1>
         <p className="muted" style={{ maxWidth: 720 }}>Acknowledgements and remediations that nobody has dealt with. Timers escalate them automatically; you can also remind the owner or escalate right now.</p></div></div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button className={`btn ${tab === 'alerts' ? 'primary' : ''}`} onClick={() => setParams({})}>Escalations</button>
-        <button className={`btn ${tab === 'selftests' ? 'primary' : ''}`} onClick={() => setParams({ tab: 'selftests' })}>Self-tests</button></div>
+      <div className="tabs" role="group" aria-label="Alert sections">
+        <button className={`btn ${tab === 'alerts' ? 'primary' : ''}`} aria-pressed={tab === 'alerts'} onClick={() => setParams({})}>Escalations</button>
+        <button className={`btn ${tab === 'selftests' ? 'primary' : ''}`} aria-pressed={tab === 'selftests'} onClick={() => setParams({ tab: 'selftests' })}>Self-tests</button></div>
       {tab === 'alerts' ? <Escalations /> : <Canary />}
     </>
   )
@@ -48,7 +48,7 @@ function Escalations() {
               <td style={{ whiteSpace: 'nowrap' }}>
                 <button className="btn sm" disabled={busy} onClick={() => act(i.task_id, 'remind')}>Remind owner</button>{' '}
                 {i.next ? <button className="btn sm primary" disabled={busy} onClick={() => act(i.task_id, 'escalate')}>Escalate to {i.next}</button>
-                  : <span className="faint">top of the ladder</span>}</td></tr>))}
+                  : <span className="escalation-final" role="img" aria-label="Highest escalation level reached" title="Highest escalation level reached"><img src="/logo.svg" alt="" /></span>}</td></tr>))}
           {!a.items.length && <tr><td colSpan={5} className="muted">Nothing is waiting. Items appear here when an owner has not signed off or updated work by its deadline, for example after you ingest an advisory on the Acknowledgements page.</td></tr>}
         </tbody></table>
         {aerr && <p className="err">{aerr}</p>}

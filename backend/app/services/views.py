@@ -1,7 +1,7 @@
 """Read models shaped for the UI screens. No state changes here."""
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from ..clock import clock
 from ..config import TIMINGS
@@ -82,12 +82,72 @@ def oversight(db) -> dict:
     failed = next((r for r in runs if r.status == "failed"), None)
     ras = db.scalars(select(M.RiskAcceptance).where(M.RiskAcceptance.status == "approved")).all()
     soon = [r for r in ras if r.expiry and r.expiry - now <= timedelta(days=7)]
+    confirmations = []
+    for a in db.scalars(select(M.Asset)):
+        state = assurance.confirmation_state(db, a)
+        if state in ("awaiting", "overdue", "unscheduled"):
+            due = assurance.confirmation_due(db, a)
+            confirmations.append({"asset": a.name, "asset_id": a.id, "state": state,
+                                  "due": due.isoformat() if due else None,
+                                  "owner": _name(db, a.owner_id)})
+    overdue_confirmations = [a for a in confirmations if a["state"] == "overdue"]
+    pending_confirmations = [a for a in confirmations if a["state"] in ("awaiting", "unscheduled")]
+    failures = []
+    for n in db.scalars(select(M.Notification).where(
+            M.Notification.delivered.is_(False),
+            or_(M.Notification.task_id.is_(None),
+                ~M.Notification.task_id.in_(select(M.Task.id).where(M.Task.is_test.is_(True)))))
+            .order_by(M.Notification.id.desc())):
+        failures.append({"id": n.id, "ts": n.created_at.isoformat(), "kind": n.kind,
+                         "recipient": _name(db, n.person_id), "task_id": n.task_id, "message": n.message})
+    mailing_changes = []
+    for e in db.scalars(select(M.AuditEvent).where(M.AuditEvent.action.in_(
+            ("mailing_list_added", "mailing_list_updated", "mailing_list_removed"))).order_by(
+                M.AuditEvent.id.desc()).limit(20)):
+        asset = db.get(M.Asset, e.entity_id) if e.entity_id else None
+        mailing_changes.append({"id": e.id, "ts": e.ts.isoformat(), "asset_id": e.entity_id,
+                                "asset": asset.name if asset else None,
+                                "actor": e.actor, "action": e.action, "detail": e.detail})
+    uncertain = list(db.scalars(select(M.Claim).where(
+        M.Claim.claim_type == "applicability", M.Claim.status == "active",
+        M.Claim.value == "cannot_determine").order_by(M.Claim.id.desc())))
+    expired = list(db.scalars(select(M.Claim).where(
+        M.Claim.status == "expired").order_by(M.Claim.id.desc())))
+    completed_runs = [r for r in runs if r.status != "running"]
+    issues = lambda label, detail, href: {"label": label, "detail": detail, "href": href}  # noqa: E731
+    drilldowns = {
+        "overdue_tasks": [issues(t["title"], f"{t['owner'] or 'No owner'} · {t['late_by']} late",
+                                 f"/remediations/{t['id']}") for t in rows],
+        "cannot_determine": [issues(db.get(M.Asset, c.asset_id).name if c.asset_id else c.statement,
+                                     c.statement, f"/claims/{c.id}") for c in uncertain],
+        "accepted_risks": [issues(db.get(M.Asset, db.get(M.Task, r.task_id).asset_id).name,
+                                  f"Risk acceptance RA-{r.id} · expires {r.expiry:%d %b %Y}" if r.expiry else f"RA-{r.id}",
+                                  f"/remediations/{r.task_id}") for r in ras],
+        "expired_evidence": [issues(c.statement, f"{c.claim_type.replace('_', ' ')} · expired {c.expiry:%d %b %Y}"
+                                     if c.expiry else c.claim_type, f"/claims/{c.id}") for c in expired],
+        "failed_deliveries": [issues(f"{n['kind'].replace('_', ' ')} to {n['recipient'] or 'no recipient'}",
+                                      n["message"], f"/oversight?tab=notifications&notification={n['id']}")
+                              for n in failures],
+        "pending_confirmations": [issues(a["asset"], f"{a['owner'] or 'No owner'} · " +
+                                         (f"Confirm by {a['due'][:10]}" if a["due"] else "Confirmation date missing"),
+                                         f"/registry?tab=Systems&asset={a['asset_id']}") for a in pending_confirmations],
+        "overdue_confirmations": [issues(a["asset"], f"{a['owner'] or 'No owner'} · Overdue since {a['due'][:10]}",
+                                         f"/registry?tab=Systems&asset={a['asset_id']}") for a in overdue_confirmations],
+        "lapsed_monitoring": [issues(c.statement, "Monitoring evidence expired", f"/claims/{c.id}")
+                              for c in expired if c.claim_type == "monitoring"],
+        "canary": [issues(db.get(M.Asset, r.asset_id).name, f"CNY-{r.id:04d} · {r.status}",
+                          f"/alerts?tab=selftests&run={r.id}") for r in completed_runs],
+    }
     return {
         "now": now.isoformat(), "banner": banner, "kpis": d,
         "high_overdue": sum(r["impact"] == "High" for r in rows),
         "risk_expiring_soon": len(soon),
         "risk_expiring_days": min(((r.expiry - now).days for r in soon), default=None),
         "overdue": rows, "lapsed": lapsed[:6],
+        "confirmations": confirmations, "pending_confirmations": pending_confirmations,
+        "overdue_confirmations": overdue_confirmations, "failed_deliveries": failures,
+        "mailing_list_changes": mailing_changes,
+        "drilldowns": drilldowns,
         "canary_failure": ({"id": failed.id, "ref": f"CNY-{failed.id:04d}",
                             "asset": db.get(M.Asset, failed.asset_id).name, "failures": failed.failures}
                            if failed else None),
@@ -155,6 +215,7 @@ def task_timeline(db, t: M.Task) -> list[dict]:
 def task_detail(db, t: M.Task) -> dict:
     a = db.get(M.Asset, t.asset_id)
     ob = db.get(M.Obligation, t.obligation_id)
+    renewal = assurance.renewal_source(db, t)
     owner = db.get(M.Person, t.owner_id) if t.owner_id else None
     mgr = db.get(M.Person, owner.manager_id) if owner and owner.manager_id else None
     risk = first_with_role(db, "risk_owner")
@@ -162,13 +223,16 @@ def task_detail(db, t: M.Task) -> dict:
     cd = countdowns(t)
     now = clock.now()
     rem = t.remediate_due - now
-    title = (f"Establish whether {a.name} runs an affected {t.component} version" if t.kind == "investigation"
+    title = (f"Renew {t.component} monitoring on {a.name}" if renewal else
+             f"Establish whether {a.name} runs an affected {t.component} version" if t.kind == "investigation"
              else f"Remediate {t.component} on {a.name}")
     return {
         "id": t.id, "ref": task_label(t), "obligation_id": ob.id, "obligation": ob.title, "asset": a.name,
         "kind": t.kind, "impact": t.impact, "status": t.status, "title": title, "component": t.component,
         "overdue": is_overdue(t, now),
-        "summary": (f"{a.name} has no verified component data for {t.component}, so PoliBridge cannot rule it in or out. "
+        "summary": (f"The evidence for “{renewal.statement}” expired. Renew the certificate or configuration, "
+                    f"then verify {t.component} on {a.name} and submit new evidence for independent review." if renewal else
+                    f"{a.name} has no verified component data for {t.component}, so PoliBridge cannot rule it in or out. "
                     "Supply component-scoped evidence, or remediate, or request time-limited risk acceptance."
                     if t.kind == "investigation" else
                     f"Patch {t.component} on {a.name}, then submit evidence for independent review."),
@@ -185,8 +249,14 @@ def task_detail(db, t: M.Task) -> dict:
         "people": {"owner": {"name": owner.name, "title": owner.title or owner.role} if owner else None,
                    "manager": mgr.name if mgr else None, "risk_owner": risk.name if risk else None,
                    "reviewer": reviewer.name if reviewer else None},
-        "close_requirement": (f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
+        "close_requirement": (f"Mark the control renewed, then submit a {renewal.verification_method.replace('_', ' ')} "
+                              f"with scope {', '.join(renewal.evidence_scope or [])} and a timestamp after the renewal. "
+                              "An independent reviewer must approve it; approved, time-limited risk acceptance is another disposition."
+                              if renewal else f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
                               f"{a.name} — or approved, time-limited risk acceptance."),
+        "renewal": ({"source_claim_id": renewal.id, "scope": renewal.evidence_scope or [],
+                     "method": renewal.verification_method, "statement": renewal.statement,
+                     "marked_fixed": bool(t.fixed_at)} if renewal else None),
         "timeline": task_timeline(db, t),
         "evidence": [{"id": e.id, "status": e.status, "purpose": e.purpose, "reasons": e.reasons}
                      for e in db.scalars(select(M.Evidence).where(M.Evidence.task_id == t.id))],
@@ -329,7 +399,7 @@ def canary_view(db) -> dict:
                         "finding": ({"id": f.id, "ref": f"DQF-{f.id:04d}", "status": f.status,
                                      "assignee": _name(db, f.assigned_to_id)} if f else None)})
             continue
-        route_fail = next((f for f in r.failures if "valid named owner" in f or "cannot receive" in f), None)
+        route_fail = next((f for f in r.failures if "valid named owner" in f or "not delivered" in f), None)
         steps.append({"n": 3, "title": "Reached a named owner", "result": "fail" if route_fail else "pass",
                       "detail": (route_fail + (f" Legacy contact: {a.legacy_contact}." if a.legacy_contact else "")
                                  if route_fail else f"Routed to {owner.name}, a directory identity.")})

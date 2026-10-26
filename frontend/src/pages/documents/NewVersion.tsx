@@ -54,9 +54,9 @@ export function NewVersionModal({ onClose, sourceId, document }: { onClose: () =
       <label>Which source is this a new version of?</label>
       <select value={sid} onChange={(e) => pickSource(e.target.value)}><option value="">Choose a source…</option>
         {manual.map((s: any) => <option key={s.id} value={s.id}>{s.name} · {s.jurisdiction} · currently v{s.latest_version || '—'}</option>)}</select>
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button className={`btn sm ${mode === 'upload' ? 'primary' : ''}`} onClick={() => { setMode('upload'); setPreview(null) }}>Upload a file</button>
-        <button className={`btn sm ${mode === 'existing' ? 'primary' : ''}`} onClick={() => { setMode('existing'); setPreview(null) }}>Pick an already-uploaded file</button></div>
+      <div className="tabs sm" role="group" aria-label="Version source">
+        <button className={`btn sm ${mode === 'upload' ? 'primary' : ''}`} aria-pressed={mode === 'upload'} onClick={() => { setMode('upload'); setPreview(null) }}>Upload a file</button>
+        <button className={`btn sm ${mode === 'existing' ? 'primary' : ''}`} aria-pressed={mode === 'existing'} onClick={() => { setMode('existing'); setPreview(null) }}>Pick an already-uploaded file</button></div>
       {mode === 'upload'
         ? <><label>File (PDF, text or Markdown)</label><input type="file" accept=".pdf,.txt,.md" onChange={(e) => { setFile(e.target.files?.[0] || null); setPreview(null) }} /></>
         : <><label>Uploaded file</label><select value={doc} onChange={(e) => { setDoc(e.target.value); setPreview(null) }}><option value="">Choose a file…</option>

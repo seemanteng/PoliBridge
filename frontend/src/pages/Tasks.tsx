@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
-import { Badge, ImpactBadge, Loading, Modal, useAction } from '../ui'
+import { Badge, ImpactBadge, Loading, Modal, TaskStatusPills, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
 import { GuidanceText } from './documents/Guidance'
 
@@ -12,9 +12,9 @@ export function TaskList() {
     <>
       <div className="head"><div><h1>Remediations</h1>
         <p className="muted" style={{ maxWidth: 720 }}>The work each owner must do to fix or investigate a finding, and the proof that it was done. Escalations for work that has stalled are on the Alerts page.</p></div></div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button className={`btn ${tab === 'updates' ? 'primary' : ''}`} onClick={() => setParams({})}>Remediation updates</button>
-        <button className={`btn ${tab === 'evidence' ? 'primary' : ''}`} onClick={() => setParams({ tab: 'evidence' })}>Evidence review</button></div>
+      <div className="tabs" role="group" aria-label="Remediation sections">
+        <button className={`btn ${tab === 'updates' ? 'primary' : ''}`} aria-pressed={tab === 'updates'} onClick={() => setParams({})}>Remediation updates</button>
+        <button className={`btn ${tab === 'evidence' ? 'primary' : ''}`} aria-pressed={tab === 'evidence'} onClick={() => setParams({ tab: 'evidence' })}>Evidence review</button></div>
       {tab === 'updates' ? <Updates /> : <EvidenceList embedded />}
     </>
   )
@@ -22,13 +22,16 @@ export function TaskList() {
 
 function Updates() {
   const [scope, setScope] = useState<'open' | 'all'>('open')
-  const path = scope === 'open' ? '/tasks?status=open' : '/tasks'
-  const { data: tasks, error } = useApi(path)
+  const { data: allTasks, error } = useApi('/tasks')
+  const tasks = allTasks ? (scope === 'open'
+    ? allTasks.filter((t: any) => ['open', 'reopened', 'fixed_pending_review'].includes(String(t.status).toLowerCase()))
+    : allTasks) : null
   return (
     <>
       <div className="head" style={{ marginTop: 14 }}><p className="muted">Separate acknowledgement and remediation countdowns for every item. Canary tests are excluded.</p>
-        <div style={{ display: 'flex', gap: 6 }}>{(['open', 'all'] as const).map((s) =>
-          <button key={s} className={`btn ${scope === s ? 'primary' : ''}`} onClick={() => setScope(s)}>{s[0].toUpperCase() + s.slice(1)}</button>)}</div></div>
+        <div className="task-list-controls"><span className="muted">{tasks ? `${tasks.length} ${scope === 'open' ? 'open' : 'total'} task${tasks.length === 1 ? '' : 's'}` : 'Loading tasks'}</span>
+          <div className="tabs sm" role="group" aria-label="Filter remediations">{(['open', 'all'] as const).map((s) =>
+            <button type="button" key={s} className={`btn ${scope === s ? 'primary' : ''}`} aria-pressed={scope === s} onClick={() => setScope(s)}>{s[0].toUpperCase() + s.slice(1)}</button>)}</div></div></div>
       <div className="card" style={{ marginTop: 16 }}>
         {!tasks ? <Loading error={error} /> : (
           <table><thead><tr><th>Remediation</th><th>Impact</th><th>Owner</th><th>Status</th><th>Latest update</th><th>Acknowledge</th><th>Remediate</th></tr></thead>
@@ -37,12 +40,12 @@ function Updates() {
                 <td><Link to={`/remediations/${t.id}`}><b>{t.kind === 'investigation' ? 'Investigate' : 'Remediate'} {t.component} on {t.asset}</b></Link>
                   <div className="faint mono">TSK-{String(t.id).padStart(4, '0')}</div></td>
                 <td><ImpactBadge impact={t.impact} short /></td>
-                <td>{t.owner}</td><td>{t.status.replaceAll('_', ' ')}{t.overdue && <> <Badge kind="over">overdue</Badge></>}</td>
+                <td>{t.owner}</td><td className="task-status-cell"><TaskStatusPills status={t.status} overdue={t.overdue} /></td>
                 <td style={{ maxWidth: 240 }}>{t.latest_update ? <><b style={{ fontWeight: 500 }}>{t.latest_update.title}</b><div className="faint">{fmt(t.latest_update.ts, true)}</div></> : <span className="muted">—</span>}</td>
                 <td className="mono">{t.acknowledged_at ? 'acknowledged' : `${t.countdown.ack_remaining_h}h`}</td>
                 <td className={`mono ${t.countdown.remediate_remaining_h < 0 ? 'red' : ''}`}>{t.countdown.remediate_remaining_h}h</td>
               </tr>))}
-              {!tasks.length && <tr><td colSpan={6} className="muted">Nothing here.</td></tr>}</tbody></table>)}
+              {!tasks.length && <tr><td colSpan={7} className="muted">{scope === 'open' ? 'No open remediations.' : 'No remediations found.'}</td></tr>}</tbody></table>)}
       </div>
     </>
   )
@@ -66,7 +69,7 @@ export function TaskDetail() {
       <div className="crumbs"><Link to={`/acknowledgements/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} />
         {t.kind === 'investigation' && <Badge kind="lbl-cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
-        {t.overdue && <Badge kind="over">Overdue</Badge>}<Badge>{t.status.replaceAll('_', ' ')}</Badge></div>
+        <TaskStatusPills status={t.status} overdue={t.overdue} /></div>
       <h1>{t.title}</h1>
       <p className="muted" style={{ maxWidth: 780 }}>{t.summary}</p>
 
@@ -110,6 +113,16 @@ export function TaskDetail() {
             {t.guidance[0].consult && <p className="faint" style={{ marginTop: 6 }}>{t.guidance[0].consulted_at ? `Checked by ${t.guidance[0].consult}` : `${t.guidance[0].consult} is checking it alongside`}</p>}</div>}
           <div className="card" style={{ marginTop: 14 }}><h2>To close this task</h2>
             <p className="muted" style={{ margin: '8px 0' }}>{t.close_requirement}</p>
+            {t.renewal && <div className="note" style={{ marginBottom: 10 }}>
+              <b>Renewal steps</b><ol style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                <li>Renew or recheck the control for {t.component} on {t.asset}.</li>
+                <li>{t.renewal.marked_fixed ? 'Already marked fixed. You can continue with evidence.' : <>Click <b>Mark fixed</b> when that work is done.</>}</li>
+                <li>Submit evidence using <b>{t.renewal.method.replaceAll('_', ' ')}</b> and the exact scope shown below. The evidence time must be after you marked it fixed.</li>
+                <li>Have an independent reviewer approve the evidence in <Link to="/remediations?tab=evidence">Evidence review</Link>.</li>
+              </ol><div className="faint" style={{ marginTop: 6 }}>Required scope: <code>{t.renewal.scope.join(', ')}</code></div>
+              {t.evidence.some((e: any) => e.status === 'rejected' && e.reasons.some((r: string) => r.includes('missing scope'))) &&
+                <p className="muted" style={{ margin: '8px 0 0' }}>Your earlier submission had an empty scope. The evidence form now fills in the required scope for you.</p>}
+            </div>}
             {open && <>
               {!t.ack.acknowledged && <button className="btn block" onClick={() => act(`/tasks/${t.id}/acknowledge`)}>Acknowledge</button>}
               {t.kind === 'remediation' && t.status !== 'fixed_pending_review' && <button className="btn block" onClick={() => act(`/tasks/${t.id}/fixed`)}>Mark fixed</button>}
@@ -140,7 +153,7 @@ function ReasonModal({ t, kind, onClose }: { t: any; kind: 'reject' | 'interim';
     sub={isRej ? 'The task is rerouted to the business-unit head now. The original deadline keeps running.' : 'A compensating control that reduces exposure until the fix lands.'} onClose={onClose}>
     <label>{isRej ? 'Reason' : 'Control description'}</label><textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
     {error && <p className="err">{error}</p>}
-    <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !text} onClick={go}>{isRej ? 'Reject and reroute' : 'Record'}</button></div></Modal>
+    <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className={`btn ${isRej ? 'danger-solid' : 'primary'}`} disabled={busy || !text} onClick={go}>{isRej ? 'Reject and reroute' : 'Record'}</button></div></Modal>
 }
 
 function RiskModal({ t, onClose }: { t: any; onClose: () => void }) {
@@ -159,23 +172,25 @@ function RiskModal({ t, onClose }: { t: any; onClose: () => void }) {
 function EvidenceModal({ t, onClose }: { t: any; onClose: () => void }) {
   const clock = useApi('/clock')
   const [f, setF] = useState({ purpose: t.kind === 'investigation' ? 'absence' : 'remediation', asset_name: t.asset, component: t.component || '',
-    scope: '', method: 'authenticated_scan', observed_version: '', timestamp: '' })
+    scope: t.renewal?.scope?.join(', ') || '', method: t.renewal?.method || 'authenticated_scan', observed_version: '', timestamp: '' })
   const { run, error, busy } = useAction()
   const go = async () => { if (await run(async () => {
-    const r = await api.post(`/tasks/${t.id}/evidence`, { ...f, scope: f.scope.split(',').map((s) => s.trim()).filter(Boolean),
+    const r = await api.post(`/tasks/${t.id}/evidence`, { ...f, scope: f.scope.split(',').map((s: string) => s.trim()).filter(Boolean),
       observed_version: f.observed_version || null, timestamp: f.timestamp || clock.data?.now })
     refreshAll(); if (r.status === 'rejected') alert('Evidence rejected: ' + r.reasons.join('; ')) })) onClose() }
   const set = (k: string, v: string) => setF({ ...f, [k]: v })
-  return <Modal title="Submit evidence" sub="Structured evidence is checked against the claim: asset, component scope, method, timestamp." onClose={onClose}>
+  return <Modal title="Submit evidence" sub={t.renewal ? 'Verify the renewed monitoring control after marking it fixed. Scope and method are filled from the expired claim.' : 'Structured evidence is checked against the claim: asset, component scope, method, timestamp.'} onClose={onClose}>
     <label>Purpose</label><select value={f.purpose} onChange={(e) => set('purpose', e.target.value)}>
-      <option value="remediation">Remediation (it is patched)</option><option value="absence">Absence (component not present)</option></select>
+      <option value="remediation">{t.renewal ? 'Monitoring control renewed' : 'Remediation (it is patched)'}</option>{!t.renewal && <option value="absence">Absence (component not present)</option>}</select>
     <label>Asset the evidence is for</label><input value={f.asset_name} onChange={(e) => set('asset_name', e.target.value)} />
     <label>Component examined</label><input value={f.component} onChange={(e) => set('component', e.target.value)} />
-    <label>Scope examined (comma separated; <code>/opt/app/**</code> means everything under)</label><input value={f.scope} onChange={(e) => set('scope', e.target.value)} placeholder="/opt/acis/**" />
+    <label>{t.renewal ? 'Scope examined (comma separated; keep the control identifiers)' : <>Scope examined (comma separated; <code>/opt/app/**</code> means everything under)</>}</label><input value={f.scope} onChange={(e) => set('scope', e.target.value)} placeholder={t.renewal ? t.renewal.scope.join(', ') : '/opt/acis/**'} />
+    {t.renewal && <p className="faint">Required: {t.renewal.scope.join(', ')}</p>}
     <label>Method</label><select value={f.method} onChange={(e) => set('method', e.target.value)}>
       <option value="authenticated_scan">Authenticated scan</option><option value="direct_version_check">Direct version check</option>
+      <option value="certificate_check">Certificate check</option><option value="configuration_review">Configuration review</option>
       <option value="sbom">SBOM</option><option value="unauthenticated_external_scan">Unauthenticated external scan</option></select>
-    {f.purpose === 'remediation' && <><label>Observed version</label><input value={f.observed_version} onChange={(e) => set('observed_version', e.target.value)} placeholder="2.3.32" /></>}
+    {f.purpose === 'remediation' && !t.renewal && <><label>Observed version</label><input value={f.observed_version} onChange={(e) => set('observed_version', e.target.value)} placeholder="2.3.32" /></>}
     <label>Evidence generated at (blank = now)</label><input value={f.timestamp} onChange={(e) => set('timestamp', e.target.value)} placeholder="2017-03-15T10:48:00" />
     {error && <p className="err">{error}</p>}
     <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>Submit for review</button></div></Modal>

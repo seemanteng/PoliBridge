@@ -22,6 +22,7 @@ Low:
 
 # Policy values used by other rules
 attestation_days: 91                # quarterly ownership attestation (B3)
+ownership_change_confirmation_days: 7  # new owner confirms within a week of a change
 attestation_due_soon_days: 14       # owners are reminded to re-attest inside this window
 component_data_stale_days: 30       # inventory older than this is "stale" (A3)
 scan_evidence_validity_days: 14     # critical internet-facing scan evidence (F1)

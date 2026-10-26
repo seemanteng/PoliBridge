@@ -27,9 +27,13 @@ def submit_evidence(db, task: Task, person: Person, *, purpose: str, asset_name,
     asset = db.get(Asset, task.asset_id)
     ob = db.get(Obligation, task.obligation_id)
     adv = db.get(Advisory, ob.advisory_id) if ob.advisory_id else None
+    from .assurance import renewal_source, check_renewal_evidence
+    renewal = renewal_source(db, task)
     comp = next((c for c in asset.components if adv and versions.norm(c.name) == versions.norm(adv.product)), None)
     needed = E.required_paths(comp.install_path if comp and purpose == "remediation" else None, asset.app_roots)
-    reasons = E.check_evidence(
+    reasons = check_renewal_evidence(
+        task, asset, renewal, purpose=purpose, asset_name=asset_name, component=component,
+        scope=scope or [], method=method, timestamp=timestamp, submitter_id=person.id) if renewal else E.check_evidence(
         purpose=purpose, task_asset=asset.name, task_component=task.component, ev_asset=asset_name,
         ev_component=component, scope=scope or [], method=method, observed_version=observed_version,
         timestamp=timestamp, submitter_id=person.id, reported_fixed_at=task.fixed_at, needed_paths=needed,
@@ -101,6 +105,11 @@ def review_evidence(db, ev: Evidence, reviewer: Person, approve: bool, comment: 
 
 
 def _complete_remediation(db, task: Task, ev: Evidence, reviewer: Person):
+    from .assurance import renewal_source, complete_renewal
+    renewal = renewal_source(db, task)
+    if renewal:
+        complete_renewal(db, task, ev, reviewer, renewal)
+        return
     asset = db.get(Asset, task.asset_id)
     ob = db.get(Obligation, task.obligation_id)
     adv = db.get(Advisory, ob.advisory_id)
@@ -208,9 +217,11 @@ def evidence_checks(db, ev: Evidence) -> dict:
     asset = db.get(Asset, task.asset_id)
     ob = db.get(Obligation, task.obligation_id)
     adv = db.get(Advisory, ob.advisory_id) if ob.advisory_id else None
+    from .assurance import renewal_source
+    renewal = renewal_source(db, task)
     comp = next((c for c in asset.components if adv and versions.norm(c.name) == versions.norm(adv.product)), None)
     needed = E.required_paths(comp.install_path if comp and ev.purpose == "remediation" else None, asset.app_roots)
-    gaps = E.scope_gaps(ev.scope or [], needed)
+    gaps = [entry for entry in renewal.evidence_scope or [] if entry not in (ev.scope or [])] if renewal else E.scope_gaps(ev.scope or [], needed)
     strong = task.impact == "High"
     validity = TIMINGS["scan_evidence_validity_days"]
     age_ok = ev.timestamp is not None and (clock.now() - ev.timestamp) <= timedelta(days=validity)
@@ -220,12 +231,15 @@ def evidence_checks(db, ev: Evidence) -> dict:
         {"check": "Asset", "requires": asset.name, "recorded": ev.asset_name or "—",
          "pass": ev.asset_name == asset.name},
         {"check": "Component scope",
-         "requires": f"{task.component or 'component'}, any path under " + (", ".join(needed) or "application roots"),
+         "requires": (", ".join(renewal.evidence_scope or []) if renewal else
+                      f"{task.component or 'component'}, any path under " + (", ".join(needed) or "application roots")),
          "recorded": ", ".join(ev.scope or []) or "—", "pass": bool(ev.scope) and not gaps},
         {"check": "Method",
-         "requires": "Authenticated scan or direct version check" + (" (critical item)" if strong else ""),
+         "requires": (renewal.verification_method.replace("_", " ") if renewal else
+                      "Authenticated scan or direct version check" + (" (critical item)" if strong else "")),
          "recorded": (ev.method or "—").replace("_", " "),
-         "pass": bool(ev.method) and (not strong or ev.method in E.STRONG_METHODS)},
+         "pass": bool(ev.method) and (ev.method == renewal.verification_method if renewal else
+                                      not strong or ev.method in E.STRONG_METHODS)},
         {"check": "Timestamp", "requires": f"Within scan validity · {validity} days",
          "recorded": ev.timestamp.strftime("%d %b %H:%M") if ev.timestamp else "—", "pass": age_ok},
         {"check": "Independence", "requires": "Reviewer differs from submitter and from whoever did the work",
@@ -233,9 +247,10 @@ def evidence_checks(db, ev: Evidence) -> dict:
          "pass": not indep},
     ]
     return {"checks": rows, "all_pass": all(r["pass"] for r in rows), "reasons": ev.reasons,
-            "examined": ev.scope or [], "needed_paths": needed, "gaps": gaps,
-            "component": task.component, "asset": asset.name,
-            "claim": (f"“{asset.name} does not use {task.component}”" if ev.purpose == "absence"
+            "examined": ev.scope or [], "needed_paths": renewal.evidence_scope if renewal else needed, "gaps": gaps,
+            "component": task.component, "asset": asset.name, "renewal": bool(renewal),
+            "claim": (f"“{renewal.statement}”" if renewal else
+                      f"“{asset.name} does not use {task.component}”" if ev.purpose == "absence"
                       else f"“{asset.name} is patched for {adv.cve if adv else 'the advisory'}”")}
 
 

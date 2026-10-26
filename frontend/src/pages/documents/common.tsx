@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fmt, useApi } from '../../api'
 import { Badge } from '../../ui'
@@ -23,6 +24,42 @@ export function FeedBadge({ feed }: { feed: any }) {
 
 export function StatusBadge({ status }: { status: string }) {
   return <Badge kind={status === 'approved' ? 'info' : status === 'pending' ? 'cd' : 'over'}>{status === 'pending' ? 'Awaiting CCO' : status}</Badge>
+}
+
+type ActionItem = { label: string; href?: string; onSelect?: () => void; danger?: boolean }
+
+export function ActionMenu({ label, items }: { label: string; items: ActionItem[] }) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false) }
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); trigger.current?.focus() }
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
+  const close = () => setOpen(false)
+  return (
+    <div className={`action-menu ${open ? 'open' : ''}`} ref={root}>
+      <button ref={trigger} type="button" className="action-menu-trigger" aria-label={label}
+        aria-haspopup="true" aria-expanded={open} title={label} onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}>
+        <span className="action-menu-dots" aria-hidden="true"><i /><i /><i /></span>
+      </button>
+      {open && <div className="action-menu-panel" role="group" aria-label={label}>
+        {items.map((item) => item.href
+          ? <Link key={item.label} className="action-menu-item" to={item.href} onClick={close}>{item.label}</Link>
+          : <button key={item.label} type="button" className={`action-menu-item ${item.danger ? 'danger' : ''}`}
+              onClick={() => { close(); item.onSelect?.() }}>{item.label}</button>)}
+      </div>}
+    </div>
+  )
 }
 
 export function PeopleSelect({ value, onChange, placeholder = 'Choose a person…' }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
