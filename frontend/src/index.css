@@ -79,6 +79,9 @@ td { padding: 12px 10px; border-bottom: 1px solid #efede6; vertical-align: top; 
 tr:last-child td { border-bottom: 0; }
 tr.hl td { background: #fff5e6; } tr.bad td { background: #fdf1f0; }
 .sec { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.chev { display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+details[open] > summary .chev { transform: rotate(90deg); }
+summary::-webkit-details-marker { display: none; }
 .stat { font-size: 22px; font-weight: 600; margin: 4px 0; }
 .late { color: var(--red); font-family: var(--mono); font-weight: 500; }
 

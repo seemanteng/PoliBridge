@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 from ..clock import clock
 from ..identity import email_for
 from ..models import (Person, BusinessUnit, Asset, Component, DiscoveredAsset, Source, SourceVersion, AuditEvent,
-                      Dependency, BoardItem, Claim, Task, Evidence, Finding)
+                      Dependency, BoardItem, Claim, Task, Evidence, Finding, ComponentVersion,
+                      MailingListMember)
 from ..services import registry, intake, assignment, closure, assurance
 from ..services.common import create_claim, person_by_directory_id as P, raise_finding
 from sqlalchemy import select
@@ -111,9 +112,28 @@ def load_baseline(db, anchor: datetime | None = None):
         db.flush()
         return a
 
-    acis = asset("ACIS · consumer dispute portal", okafor, internet_facing=True, critical=True, customer_facing=True,
+    # ACIS's inventory was last refreshed by its former owner and has been stale since: still Cannot Determine (A3)
+    acis = asset("ACIS · consumer dispute portal", okafor, T(D(2015, 11, 20)), "sbom", ["/opt/acis/**"],
+                 [("Apache Tomcat", "7.0.59", "/opt/acis/tomcat"), ("OpenJDK", "1.7.0_79", "/opt/acis/jdk"),
+                  ("Apache HTTP Server", "2.2.15", "/opt/acis/httpd"), ("OpenSSL", "1.0.1e", "/opt/acis/httpd/ssl"),
+                  ("jquery", "1.8.3", "/opt/acis/web/static/js"), ("Oracle JDBC driver", "11.2.0.4", "/opt/acis/lib")],
+                 internet_facing=True, critical=True, customer_facing=True,
                  data_sensitivity="confidential", app_roots=["/opt/acis"],
                  legacy_contact="acis-ops (distribution list)")
+    # its version history, as recorded while Remi Okafor still owned it
+    for when, comp, frm, to, src, note in (
+            (D(2014, 6, 2), "Apache Tomcat", None, "7.0.54", "sbom", "initial build"),
+            (D(2014, 6, 2), "OpenJDK", None, "1.7.0_60", "sbom", "initial build"),
+            (D(2014, 6, 2), "Apache HTTP Server", None, "2.2.15", "sbom", "initial build"),
+            (D(2014, 6, 2), "OpenSSL", None, "1.0.1e", "sbom", "initial build"),
+            (D(2014, 6, 2), "jquery", None, "1.8.3", "sbom", "initial build"),
+            (D(2014, 6, 2), "Oracle JDBC driver", None, "11.2.0.3", "sbom", "initial build"),
+            (D(2014, 10, 14), "OpenJDK", "1.7.0_60", "1.7.0_71", "manual", "Oracle October critical patch update"),
+            (D(2015, 3, 9), "Apache Tomcat", "7.0.54", "7.0.59", "manual", "quarterly patching"),
+            (D(2015, 5, 18), "OpenJDK", "1.7.0_71", "1.7.0_79", "manual", "April critical patch update"),
+            (D(2015, 11, 20), "Oracle JDBC driver", "11.2.0.3", "11.2.0.4", "sbom", "database client upgrade")):
+        db.add(ComponentVersion(asset_id=acis.id, component=comp, from_version=frm, to_version=to, source=src,
+                                actor="rokafor", note=note, ts=T(when)))
     cf = mp = None
     if not live:
         cf = asset("Credit File API", adeyemi, T(D(2017, 3, 2)), "sbom", ["/opt/cfapi/**"],
@@ -126,14 +146,22 @@ def load_baseline(db, anchor: datetime | None = None):
                   [("jasperreports", "6.1.0", "/srv/batch/jasper")], app_roots=["/srv/batch"])
     hr = asset("HR payroll · vendor SaaS", ramirez, T(D(2017, 3, 1)), "vendor_sbom", ["/vendor/hr/**"],
                [("rails", "4.2.7", "/vendor/hr/app")], internet_facing=True, data_sensitivity="confidential",
-               app_roots=["/vendor/hr"])
+               app_roots=["/vendor/hr"], in_scanner_targets=False)  # vendor-hosted, left off the scanner list (B2)
     wiki = asset("Internal wiki", ramirez, T(D(2017, 3, 7)), "authenticated_scan", ["/srv/wiki/**"],
                  [("confluence", "5.9", "/srv/wiki/app")], app_roots=["/srv/wiki"])
     db.add_all([DiscoveredAsset(name=a.name, source="network", internet_facing=a.internet_facing)
                 for a in (acis, cf, mp, batch, hr, wiki) if a])
-    for a in (cf, mp, batch, hr, wiki):
+    # seen by discovery but never registered (B1): a public endpoint someone stood up, and an internal database
+    db.add_all([DiscoveredAsset(name="dispute-api.shadow.example", source="dns", internet_facing=True),
+                DiscoveredAsset(name="acis-reporting-db02", source="network", internet_facing=False)])
+    for a in (cf, mp, batch, hr, wiki if not live else None):
         if a:
             registry.attest_ownership(db, a, db.get(Person, a.owner_id))
+    if live:  # the wiki was last attested in mid-December, so its quarterly re-attestation is due soon (B3)
+        seeded = clock.now()
+        clock.set(T(D(2016, 12, 15, 10, 0)))
+        registry.attest_ownership(db, wiki, ramirez)
+        clock.set(seeded)
 
     # Ownership of ACIS lapsed when its owner left (2 Feb)
     old = create_claim(db, actor="directory", claim_type="ownership", asset_id=acis.id, value="attested",
@@ -151,10 +179,26 @@ def load_baseline(db, anchor: datetime | None = None):
                         reviewer_id=P(db, "tbrandt").id, verification_method="certificate_check",
                         evidence_ts=T(D(2016, 9, 16, 10, 20)), expiry=T(D(2017, 3, 14, 23, 59)),
                         evidence_scope=["cert:SSLV-02", "Decryption policy for ACIS egress"], component="SSLV-02")
+    create_claim(db, actor="kosei", claim_type="monitoring", asset_id=acis.id, value="in_effect",
+                 statement="ACIS inbound web traffic passes the web-application firewall", owner_id=osei.id,
+                 submitter_id=osei.id, reviewer_id=P(db, "amensah").id, verification_method="configuration_review",
+                 evidence_ts=T(D(2016, 11, 3, 14, 0)), expiry=T(D(2017, 11, 3, 23, 59)),
+                 evidence_scope=["policy:WAF-ACIS-01"], component="WAF-ACIS-01")
     board = BoardItem(ref="Q1-07", title="monitoring coverage", owner_id=ciso.id)
     db.add(board)
     db.flush()
     db.add(Dependency(claim_id=cert.id, dependent_type="board_item", dependent_id=board.id))
+
+    # stakeholder mailing lists: summaries only. Remi Okafor joined ACIS's before leaving, so sends skip him.
+    lists = {acis: [("dwhitfield", "Department head"), ("kosei", "Network security"), ("jpark", "Security analyst"),
+                    ("mlin", "Compliance"), ("rokafor", "Former owner")],
+             hr: [("sramirez", "System owner"), ("mlin", "Compliance"), ("lmarsh", "Legal: payroll data")],
+             wiki: [("sramirez", "System owner"), ("jpark", "Security analyst")],
+             batch: [("sramirez", "System owner"), ("dwhitfield", "Department head")]}
+    for a, members in lists.items():
+        for did, stake in members:
+            db.add(MailingListMember(asset_id=a.id, person_id=P(db, did).id, stake=stake, added_by="dwhitfield",
+                                     added_at=T(D(2016, 6, 1))))
 
     from .sources import load_sources
     load_sources(db, live=live, anchor=A, seeded_at=clock.now(), policy_text=INFOSEC_POLICY_V1,

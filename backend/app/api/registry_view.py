@@ -55,10 +55,41 @@ def registry(db=Depends(get_db)):
                 {"id": c.id, "type": c.claim_type, "value": c.value, "status": c.status, "statement": c.statement,
                  "expiry": _iso(c.expiry)})
 
+    advisories = list(db.scalars(select(M.Advisory).where(M.Advisory.is_canary.is_(False))))
+    by_did = {p.directory_id: p.name for p in people.values()}
+    history_by_asset: dict[int, list] = {}
+    for h in db.scalars(select(M.ComponentVersion).order_by(M.ComponentVersion.ts.desc(), M.ComponentVersion.id.desc())):
+        history_by_asset.setdefault(h.asset_id, []).append(
+            {"id": h.id, "component": h.component, "from": h.from_version, "to": h.to_version, "source": h.source,
+             "actor": h.actor, "actor_name": by_did.get(h.actor), "note": h.note, "ts": _iso(h.ts)})
+
+    lists: dict[int, list] = {}
+    for m in db.scalars(select(M.MailingListMember).order_by(M.MailingListMember.id)):
+        p = people.get(m.person_id)
+        if p:
+            lists.setdefault(m.asset_id, []).append(
+                {"id": m.id, "person_id": p.id, "name": p.name, "directory_id": p.directory_id, "email": p.email,
+                 "title": p.title, "stake": m.stake, "status": reg.mailing_list_status(p), "added_by": m.added_by,
+                 "added_at": _iso(m.added_at)})
+    last_sent = {e.entity_id: _iso(e.ts) for e in db.scalars(select(M.AuditEvent).where(
+        M.AuditEvent.entity == "asset", M.AuditEvent.action == "summary_broadcast").order_by(M.AuditEvent.ts))}
+
     stale_days = TIMINGS["component_data_stale_days"]
     out_assets = []
     for a in assets:
         ok, why = common.owner_validity(db, a)
+        components = []
+        for c in a.components:
+            needed = reg.updates_needed(c, advisories)
+            fixes = [n["fixed_version"] for n in needed if n["fixed_version"]]
+            components.append({"name": c.name, "version": c.version, "path": c.install_path, "advisories": needed,
+                               "update_to": max(fixes, key=reg.versions.parse) if fixes else None})
+        history = history_by_asset.get(a.id, [])
+        logged = {reg.versions.norm(h["component"]) for h in history}
+        # components recorded before the log existed: their version on record is the starting point
+        history += [{"id": None, "component": c.name, "from": None, "to": c.version, "source": "baseline",
+                     "actor": "system", "note": "version on record when the log began", "ts": None}
+                    for c in a.components if reg.versions.norm(c.name) not in logged]
         owner = people.get(a.owner_id)
         bu = next((b for b in bus if b.id == a.business_unit_id), None)
         verified = a.inventory_verified_at
@@ -72,11 +103,14 @@ def registry(db=Depends(get_db)):
             "manager": name(owner.manager_id) if owner else None,
             "bu_head": name(bu.head_id) if bu else None,
             "ownership_attested_at": _iso(a.ownership_attested_at),
+            "attestation": {"state": reg.attestation_state(a), "due": _iso(reg.attestation_due(a))},
             "inventory": {"verified_at": _iso(verified), "method": a.inventory_method, "scope": a.inventory_scope,
                           "state": "none" if not verified else "stale" if now - verified > timedelta(days=stale_days) else "current"},
             "in_scanner_targets": a.in_scanner_targets,
-            "components": [{"name": c.name, "version": c.version, "path": c.install_path} for c in a.components],
+            "components": components, "version_history": history,
+            "updates_needed": sum(1 for c in components if c["advisories"]),
             "open_tasks": tasks_by_asset.get(a.id, []), "claims": claims_by_asset.get(a.id, []),
+            "mailing_list": lists.get(a.id, []), "last_summary_at": last_sent.get(a.id),
         })
 
     findings = [{"id": f.id, "kind": f.kind, "severity": f.severity, "subject": f.subject, "detail": f.detail,
@@ -350,6 +384,7 @@ def add_system(body: SystemIn, db=Depends(get_db), me=Depends(actor)):
     audit.log(db, me.directory_id, "asset", a.id, "created", name=name, owner=owner.directory_id if owner else None)
     # open advisories now cover the new system; with no component data it correctly starts as Cannot Determine (A3)
     assessment.reassess_all(db)
+    reg.reconcile_discovery(db)  # registering a discovered asset resolves its B1 finding
     db.commit()
     return {"id": a.id, "needs_attestation": bool(owner)}
 
@@ -382,7 +417,114 @@ def edit_system(aid: int, body: SystemPatch, db=Depends(get_db), me=Depends(acto
         for d in db.scalars(select(M.DiscoveredAsset).where(M.DiscoveredAsset.name == old_name)):
             d.name = a.name
     audit.log(db, me.directory_id, "asset", a.id, "updated", **{k: str(v) for k, v in ch.items()})
+    if a.name != old_name or "in_scanner_targets" in ch:  # B1/B2 findings follow the name and scanner coverage
+        reg.reconcile_discovery(db)
     if exposure_changed:  # impact depends on exposure, so open advisories are re-matched
         assessment.reassess_all(db)
     db.commit()
     return {"id": a.id}
+
+
+class ComponentVersionIn(BaseModel):
+    name: str
+    version: str
+    install_path: str | None = None
+    note: str | None = None
+
+
+@router.post("/assets/{aid}/components")
+def record_component_version(aid: int, body: ComponentVersionIn, db=Depends(get_db), me=Depends(actor)):
+    """An upgrade done outside PoliBridge: log the new version and re-match open advisories against it."""
+    a = db.get(M.Asset, aid)
+    if not a:
+        raise HTTPException(404, "system not found")
+    name, version = body.name.strip(), body.version.strip()
+    if not name or not version:
+        raise HTTPException(400, "component name and version are required")
+    path = (body.install_path or "").strip() or None
+    if path and not path.startswith("/"):
+        raise HTTPException(400, f"install path '{path}' must be an absolute path such as /opt/app")
+    # A5: leaving an affected range lowers caution, so it needs reviewed evidence, not a typed-in version
+    comp = next((c for c in a.components if reg.versions.norm(c.name) == reg.versions.norm(name)), None)
+    if comp:
+        advisories = list(db.scalars(select(M.Advisory).where(M.Advisory.is_canary.is_(False))))
+        for adv in advisories:
+            if reg.updates_needed(comp, [adv]) and not reg.versions.affected(version, adv.affected_versions or []):
+                raise HTTPException(400, f"{comp.name} {comp.version} is affected by {adv.cve}. Record the upgrade by "
+                                         "submitting remediation evidence on its task, so it is independently reviewed; "
+                                         "the version log updates when the evidence is accepted.")
+    try:
+        reg.set_component_version(db, a, name, version, install_path=path, source="manual", actor=me.directory_id,
+                                  note=(body.note or "").strip() or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    assessment.reassess_all(db)
+    db.commit()
+    return {"id": a.id}
+
+
+# ---------- per-system mailing lists: broadcast only, checked against active employees ----------
+class MemberIn(BaseModel):
+    person_id: int
+    stake: str | None = None
+
+
+class MemberPatch(BaseModel):
+    stake: str | None = None
+
+
+def _member(db, mid):
+    m = db.get(M.MailingListMember, mid)
+    if not m:
+        raise HTTPException(404, "mailing list entry not found")
+    return m
+
+
+@router.post("/assets/{aid}/mailing-list")
+def add_member(aid: int, body: MemberIn, db=Depends(get_db), me=Depends(actor)):
+    a, p = db.get(M.Asset, aid), db.get(M.Person, body.person_id)
+    if not a or not p:
+        raise HTTPException(404, "system or person not found")
+    try:
+        m = reg.add_to_mailing_list(db, a, p, body.stake, actor=me.directory_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"id": m.id}
+
+
+@router.patch("/mailing-list/{mid}")
+def edit_member(mid: int, body: MemberPatch, db=Depends(get_db), me=Depends(actor)):
+    m = _member(db, mid)
+    m.stake = (body.stake or "").strip() or None
+    audit.log(db, me.directory_id, "asset", m.asset_id, "mailing_list_updated", person_id=m.person_id, stake=m.stake)
+    db.commit()
+    return {"id": m.id}
+
+
+@router.delete("/mailing-list/{mid}")
+def remove_member(mid: int, db=Depends(get_db), me=Depends(actor)):
+    m = _member(db, mid)
+    p = db.get(M.Person, m.person_id)
+    audit.log(db, me.directory_id, "asset", m.asset_id, "mailing_list_removed", person=p.directory_id if p else None)
+    db.delete(m)
+    db.commit()
+    return {"removed": mid}
+
+
+@router.get("/assets/{aid}/summary")
+def preview_summary(aid: int, db=Depends(get_db)):
+    a = db.get(M.Asset, aid)
+    if not a:
+        raise HTTPException(404, "system not found")
+    return {"summary": reg.system_summary(db, a)}
+
+
+@router.post("/assets/{aid}/mailing-list/broadcast")
+def broadcast_summary(aid: int, db=Depends(get_db), me=Depends(actor)):
+    a = db.get(M.Asset, aid)
+    if not a:
+        raise HTTPException(404, "system not found")
+    out = reg.broadcast_summary(db, a, actor=me.directory_id)
+    db.commit()
+    return out

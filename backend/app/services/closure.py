@@ -114,6 +114,12 @@ def _complete_remediation(db, task: Task, ev: Evidence, reviewer: Person):
     add_dependency(db, claim, "task", task.id)
     ev.claim_id = claim.id
     task.status, task.disposition, task.closed_at = "closed", "remediated", clock.now()
+    # accepted evidence shows the version now running: keep the inventory and its version log current
+    comp = next((c for c in asset.components if versions.norm(c.name) == versions.norm(adv.product)), None)
+    if comp and ev.observed_version and comp.version != ev.observed_version:
+        from .registry import set_component_version  # local import avoids a cycle
+        set_component_version(db, asset, comp.name, ev.observed_version, source="remediation_evidence",
+                              actor=reviewer.directory_id, note=f"{adv.cve} remediated, evidence {ev.id} accepted")
 
 
 # ---------- C2-C4: sign-offs a task's impact requires before closure ----------

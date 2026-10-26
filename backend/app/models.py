@@ -70,6 +70,31 @@ class Component(Base):
     asset = relationship("Asset", back_populates="components")
 
 
+class ComponentVersion(Base):
+    """Version audit log: one row each time a system's component is added, changed or removed."""
+    __tablename__ = "component_version"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"))
+    component: Mapped[str] = mapped_column(String)
+    from_version: Mapped[str | None] = mapped_column(String, nullable=True)  # None: newly recorded
+    to_version: Mapped[str | None] = mapped_column(String, nullable=True)  # None: removed
+    source: Mapped[str] = mapped_column(String)  # sbom|sca|authenticated_scan|manual|remediation_evidence
+    actor: Mapped[str] = mapped_column(String, default="system")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class MailingListMember(Base):
+    """A stakeholder on a system's mailing list. Broadcast only: summaries go here, tasks and escalations never do."""
+    __tablename__ = "mailing_list_member"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"))
+    person_id: Mapped[int] = mapped_column(ForeignKey("person.id"))  # a directory identity, never a raw address
+    stake: Mapped[str | None] = mapped_column(String, nullable=True)  # why they follow the system, e.g. "Business user"
+    added_by: Mapped[str] = mapped_column(String, default="system")
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class DiscoveredAsset(Base):
     """What discovery sources saw; reconciled against the register (B1)."""
     __tablename__ = "discovered_asset"

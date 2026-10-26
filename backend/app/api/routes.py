@@ -258,7 +258,8 @@ class ClaimIn(BaseModel):
     owner_id: int | None = None  # told when the claim lapses
 
 
-CLAIM_METHODS = ("authenticated_scan", "direct_version_check", "sbom", "sca", "attestation", "certificate_check")
+CLAIM_METHODS = ("authenticated_scan", "direct_version_check", "sbom", "sca", "attestation", "certificate_check",
+                 "configuration_review")
 
 
 @router.post("/claims")
@@ -297,13 +298,20 @@ class Monitoring(BaseModel):
     asset_id: int
     name: str
     owner_id: int
-    cert_expiry: datetime
+    cert_expiry: datetime  # certificate expiry, or the next configuration review date
+    method: str = "certificate_check"  # certificate_check | configuration_review
 
 
 @router.post("/monitoring")
 def add_monitoring(body: Monitoring, db=Depends(get_db), me=Depends(actor)):
-    c = registry.register_monitoring_control(db, one(db, M.Asset, body.asset_id), body.name,
-                                             one(db, M.Person, body.owner_id), body.cert_expiry, me.directory_id)
+    if body.cert_expiry <= clock.now():
+        raise HTTPException(400, "F1: the expiry must be in the future")
+    try:
+        c = registry.register_monitoring_control(db, one(db, M.Asset, body.asset_id), body.name,
+                                                 one(db, M.Person, body.owner_id), body.cert_expiry, me.directory_id,
+                                                 method=body.method)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     db.commit()
     return ser(c)
 
