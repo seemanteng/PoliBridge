@@ -362,17 +362,21 @@ def approval_rules(db=Depends(get_db)):
 
 class SignoffIn(BaseModel):
     role: str  # security | system_owner | compliance | legal
+    record_version: str | None = None  # system_owner: the version their own component record shows
+    record_source: str | None = None  # system_owner: where that record comes from (closure.RECORD_SOURCES)
+    note: str = ""
 
 
 @router.post("/tasks/{tid}/review-signoff")
 def review_signoff(tid: int, body: SignoffIn, db=Depends(get_db), me=Depends(actor)):
     t = one(db, M.Task, tid)
-    signer = closure.required_signer(db, t, body.role) if body.role in (t.required_reviewers or []) else None
+    signer = closure.required_signer(db, t, body.role) if body.role in closure.needed_signoffs(t) else None
     if signer is None:
         raise HTTPException(400, "nobody can sign this off: check the task's required reviewers")
     person = on_behalf(db, me, signer, "task", tid, f"sign_off {body.role}")
-    guarded(lambda: closure.sign_required_review(db, t, body.role, person))(db)
-    return {"signoffs": closure.signoff_view(db, t), "status": t.status}
+    guarded(lambda: closure.sign_required_review(db, t, body.role, person, record_version=body.record_version,
+                                                 record_source=body.record_source, note=body.note))(db)
+    return {"signoffs": closure.signoff_view(db, t), "status": t.status, "dispute": t.signoff_dispute}
 
 
 # ---------- quarterly summary ----------

@@ -40,7 +40,7 @@ def init_db(eng=None):
              "source_version": {"sha256": "TEXT", "file_name": "TEXT", "retrieved_from": "TEXT",
                                 "effective_date": "TEXT", "uploaded_by": "TEXT", "summary": "JSON"},
              "claim": {"source_id": "INTEGER"},
-             "task": {"reviewer_signoffs": "JSON DEFAULT '{}'"},
+             "task": {"reviewer_signoffs": "JSON DEFAULT '{}'", "signoff_dispute": "JSON"},
              "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
                           "topic": "TEXT", "approver_id": "INTEGER", "approved_at": "DATETIME", "consult_id": "INTEGER",
                           "consulted_at": "DATETIME", "human_authored": "BOOLEAN DEFAULT 0"},

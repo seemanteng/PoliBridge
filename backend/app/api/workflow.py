@@ -1,5 +1,5 @@
 """Read models and actions for the Acknowledgements and Alerts pages."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -107,6 +107,14 @@ def alerts(db=Depends(get_db)):
         if t.acknowledged_at is None and now > t.ack_due:
             items.append({**base, "type": "unsigned", "what": "Acknowledgement not signed",
                           "late_by_h": round((now - t.ack_due).total_seconds() / 3600, 1), "due": _iso(t.ack_due)})
+        d = t.signoff_dispute
+        if d and not d.get("resolved_at"):
+            since = datetime.fromisoformat(d["at"])
+            top = d.get("escalated_at") or base["next"] is None  # already with the risk owner and senior management
+            items.append({**base, "type": "disputed", "what": f"Remediation sign-offs disagree: {d['reason']}",
+                          "late_by_h": round((now - since).total_seconds() / 3600, 1), "due": d["at"],
+                          "escalated_to": ", ".join(d.get("escalated_to") or []) or base["escalated_to"],
+                          "next": None if top else "risk owner and senior management"})
         if is_overdue(t, now):
             items.append({**base, "type": "overdue", "what": "Remediation past its deadline",
                           "late_by_h": round((now - t.remediate_due).total_seconds() / 3600, 1), "due": _iso(t.remediate_due)})
@@ -122,7 +130,8 @@ def alerts(db=Depends(get_db)):
     log = [{"ts": _iso(n.created_at), "kind": n.kind, "to": db.get(M.Person, n.person_id).name if n.person_id else None,
             "message": n.message, "delivered": n.delivered, "task_id": n.task_id}
            for n in db.scalars(select(M.Notification).where(M.Notification.kind.in_(
-               ["escalate_manager", "escalate_ciso", "deadline_missed", "interim_missing", "reminder"]))
+               ["escalate_manager", "escalate_ciso", "deadline_missed", "interim_missing", "reminder",
+                "signoff_disputed", "dispute_unresolved"]))
                .order_by(M.Notification.id.desc()).limit(40))]
     return {"now": _iso(now), "items": items, "findings": findings, "log": log}
 

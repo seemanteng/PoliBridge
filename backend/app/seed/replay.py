@@ -259,10 +259,13 @@ def run_storyline(db):
                                  asset_name="Credit File API", component="struts2-core",
                                  scope=["/opt/cfapi/**"], method="authenticated_scan", observed_version="2.3.32",
                                  timestamp=clock.now())
-    # a critical system holding personal data: Security, the system owner and Compliance sign off too (C2, C3)
-    for key, did in (("security", "crhodes"), ("system_owner", "madeyemi"), ("compliance", "mlin")):
-        if key in tasks["Credit File API"].required_reviewers:
-            closure.sign_required_review(db, tasks["Credit File API"], key, me(did))
+    # both functions sign off (§6.5): the owner's deployment record agrees with the scan; Information Security confirms
+    # the scan covered the component. A critical system holding personal data also needs Compliance (C3).
+    closure.sign_required_review(db, tasks["Credit File API"], "system_owner", me("madeyemi"),
+                                 record_version="2.3.32", record_source="deployment_record")
+    closure.sign_required_review(db, tasks["Credit File API"], "security", me("crhodes"))
+    if "compliance" in tasks["Credit File API"].required_reviewers:
+        closure.sign_required_review(db, tasks["Credit File API"], "compliance", me("mlin"))
     closure.review_evidence(db, ev, me("amensah"), True, "Authenticated scan covers the component path.")
     db.commit()
 
