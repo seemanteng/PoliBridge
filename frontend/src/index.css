@@ -202,6 +202,12 @@ code { font: 12px var(--mono); background: #edf2f8; padding: 2px 5px; border-rad
 .note.fail { background: var(--red-soft); border: 1px solid var(--red-line); }
 .note.fail b { color: var(--red); }
 .note.ok { background: #e4f2ea; border: 1px solid #a9d3bb; } .note.ok b { color: var(--green); }
+/* Component 5: remediation sign-offs on the task page */
+.signoff-dispute p { margin: 4px 0 0; color: var(--ink); font-weight: 400; }
+.signoff-dispute p.muted { color: var(--muted); }
+.signoff-row { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+.signoff-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.signoff-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pass { color: var(--blue); font-weight: 500; } .fail { color: var(--red); font-weight: 600; }
 .tree { border: 1px solid var(--line); border-radius: 8px; font: 12px var(--mono); overflow: hidden; }
 .tree .top { background: var(--blue-soft); padding: 6px 10px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); }

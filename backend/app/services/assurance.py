@@ -215,6 +215,8 @@ def sweep(db) -> dict:
     evaluate_canaries(db)
     silent = feeds.check_health(db)
     late_signoffs = approvals.check_clause_signoffs(db)
+    from .closure import check_disputes
+    disputes = check_disputes(db)  # C5: remediation sign-offs that still disagree go up the ladder
     from .registry import reconcile_discovery, attestation_reminders
     reconcile_discovery(db)  # B1, B2: the register is checked against discovery on every pass
     attestation_reminders(db)  # B3: owners are asked to re-attest before the quarter runs out
@@ -222,7 +224,7 @@ def sweep(db) -> dict:
     return {"expired_claims": [c.id for c in expired],
             "sources_due": [db.get(Source, c.source_id).name for c in expired if c.claim_type == "source_currency"],
             "feeds": [p for p in polled if p["received"] or not p["ok"]], "silent_feeds": silent,
-            "late_signoffs": late_signoffs}
+            "late_signoffs": late_signoffs, "escalated_disputes": disputes}
 
 
 # ---- canaries (F3) ----

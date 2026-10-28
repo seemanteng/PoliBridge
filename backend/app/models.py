@@ -276,7 +276,9 @@ class Task(Base):
     disposition: Mapped[str | None] = mapped_column(String, nullable=True)  # remediated|risk_accepted
     board_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     required_reviewers: Mapped[list] = mapped_column(JSON, default=list)  # C2-C4: security|system_owner|compliance|legal
-    reviewer_signoffs: Mapped[dict] = mapped_column(JSON, default=dict)  # {role: {by, at}}
+    reviewer_signoffs: Mapped[dict] = mapped_column(JSON, default=dict)  # {role: {by, at, evidence_id, ...}}
+    # the latest disagreement between sign-offs: {key, by, reason, at, auto, evidence_id, escalated_at, resolved_at}
+    signoff_dispute: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
