@@ -6,7 +6,7 @@ import { OrgChart, OwnershipMap } from './RegistryCharts'
 import { Controls } from '../filters'
 import { has, uniq } from '../filterUtils'
 
-const TABS = ['People', 'Organisations', 'Systems', 'Findings'] as const
+const TABS = ['People', 'Organisations', 'Systems'] as const
 const ROLE: Record<string, string> = {
   ciso: 'CISO', risk_owner: 'Risk owner', senior_mgmt: 'Senior management', compliance: 'Compliance', legal: 'Legal',
   cco: 'Compliance officer', reviewer: 'Independent reviewer', internal_audit: 'Internal audit', manager: 'Manager',
@@ -23,6 +23,32 @@ const DUTY: Record<string, string> = {
 }
 
 const ROLE_OPTIONS = Object.keys(ROLE)
+
+// Owners are picked by role first; when several people share the role, a second list names them,
+// with the system's department head marked and listed first.
+function OwnerPicker({ people, exclude, headId, value, onChange, none }: {
+  people: any[]; exclude?: number | null; headId?: number | null; value: string; onChange: (id: string) => void; none: string }) {
+  const [role, setRole] = useState(() => people.find((p) => String(p.id) === value)?.role || '')
+  const candidates = people.filter((p) => p.active && p.id !== exclude)
+  const roles = ROLE_OPTIONS.filter((r) => candidates.some((p) => p.role === r))
+  const inRole = candidates.filter((p) => p.role === role)
+    .sort((x, y) => Number(y.id === headId) - Number(x.id === headId) || x.name.localeCompare(y.name))
+  const label = (p: any) => `${p.name}${p.id === headId ? ' (head)' : ''}`
+  const choose = (r: string) => {
+    setRole(r)
+    const match = candidates.filter((p) => p.role === r)
+    onChange(match.length === 1 ? String(match[0].id) : '')
+  }
+  return (
+    <>
+      <select value={role} onChange={(e) => choose(e.target.value)}><option value="">{none}</option>
+        {roles.map((r) => <option key={r} value={r}>{ROLE[r]}</option>)}</select>
+      {inRole.length > 1 && <select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Choose one of {inRole.length}…</option>
+        {inRole.map((p) => <option key={p.id} value={p.id}>{label(p)}</option>)}</select>}
+      {inRole.length === 1 && <span className="faint">→ {label(inRole[0])}</span>}
+    </>
+  )
+}
 
 function PersonModal({ person, people, units, onClose }: { person?: any; people: any[]; units: any[]; onClose: () => void }) {
   const { run, error, busy } = useAction()
@@ -135,8 +161,9 @@ function SystemModal({ system, name, people, units, onClose }: { system?: any; n
       <select value={f.unit} onChange={(e) => set('unit', e.target.value)}><option value="">Choose…</option>
         {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
       <label>{system ? 'Owner (leave to keep the current owner)' : 'Owner'}</label>
-      <select value={f.owner} onChange={(e) => set('owner', e.target.value)}><option value="">{system ? `Keep ${system.owner || 'no owner'}` : 'Choose a person…'}</option>
-        {people.filter((p) => p.active && p.id !== system?.owner_id).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.title || ROLE[p.role]}</option>)}</select>
+      <div className="inline-actions" style={{ marginTop: 0 }}>
+        <OwnerPicker people={people} exclude={system?.owner_id} headId={units.find((u) => String(u.id) === f.unit)?.head_id}
+          value={f.owner} onChange={(v) => set('owner', v)} none={system ? `Keep ${system.owner || 'no owner'}` : 'Choose a role…'} /></div>
       {system && f.owner && <p className="faint">Changing the owner voids the current attestation. The new owner must attest, and open remediation moves to them.</p>}
       <label>Data sensitivity</label>
       <select value={f.sensitivity} onChange={(e) => set('sensitivity', e.target.value)}>
@@ -155,13 +182,13 @@ function SystemModal({ system, name, people, units, onClose }: { system?: any; n
 function OwnerControls({ a, people }: { a: any; people: any[] }) {
   const { run, error, busy } = useAction()
   const [pick, setPick] = useState('')
+  const [reset, setReset] = useState(0)  // remounts the picker so its role clears after a reassignment
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
       <div className="faint">Ownership</div>
       <div className="inline-actions">
-        <select value={pick} onChange={(e) => setPick(e.target.value)}><option value="">Reassign owner to…</option>
-          {people.filter((p) => p.active && p.name !== a.owner).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-        <button className="btn sm" disabled={busy || !pick} onClick={() => run(async () => { await api.post(`/registry/assets/${a.id}/owner`, { owner_id: Number(pick) }); setPick(''); refreshAll() })}>Reassign</button>
+        <OwnerPicker key={reset} people={people} exclude={a.owner_id} headId={a.bu_head_id} value={pick} onChange={setPick} none="Reassign owner to role…" />
+        <button className="btn sm" disabled={busy || !pick} onClick={() => run(async () => { await api.post(`/registry/assets/${a.id}/owner`, { owner_id: Number(pick) }); setPick(''); setReset((n) => n + 1); refreshAll() })}>Reassign</button>
         {(!a.owner_valid || a.attestation.state === 'due_soon') && a.owner_active && <button className="btn sm primary" disabled={busy} onClick={() => run(async () => { await api.post(`/assets/${a.id}/attest`); refreshAll() })}>{a.owner_valid ? 'Re-attest ownership' : 'Attest ownership'}</button>}
       </div>
       {!a.owner_valid && <p className="faint" style={{ marginTop: 4 }}>Record the new owner's confirmation with Attest ownership.</p>}
@@ -204,7 +231,7 @@ const LIST_STATUS: Record<string, [string, string]> = {
   active: ['ok', 'active'], undeliverable: ['over', 'mail undeliverable'], left: ['over', 'left: not sent to'],
 }
 
-function MailingList({ a, people }: { a: any; people: any[] }) {
+function MailingList({ a, people, restricted = false }: { a: any; people: any[]; restricted?: boolean }) {
   const { run, error, busy } = useAction()
   const [add, setAdd] = useState({ person: '', stake: '' })
   const [editing, setEditing] = useState<{ id: number; stake: string } | null>(null)
@@ -214,20 +241,22 @@ function MailingList({ a, people }: { a: any; people: any[] }) {
   const reachable = a.mailing_list.filter((m: any) => m.status === 'active').length
   return (
     <div style={{ marginTop: 14 }}>
-      <div className="faint">Stakeholder mailing list (summaries only; tasks and escalations always go to the owner)</div>
-      <table style={{ marginTop: 4 }}><thead><tr><th>Person</th><th>Stake in the system</th><th>Directory check</th><th></th></tr></thead><tbody>
+      <div className="faint">{restricted ? 'Stakeholders to contact about this system' : 'Stakeholder mailing list (summaries only; tasks and escalations always go to the owner)'}</div>
+      <table style={{ marginTop: 4 }}><thead><tr><th>Person</th><th>Stake in the system</th><th>Directory check</th>{!restricted && <th></th>}</tr></thead><tbody>
         {a.mailing_list.map((m: any) => <tr key={m.id}>
-          <td><b>{m.name}</b><div className="faint mono">{m.directory_id}{m.title ? ` · ${m.title}` : ''}</div></td>
+          <td><b>{m.name}</b><div className="faint mono">{m.directory_id}{m.title ? ` · ${m.title}` : ''}</div>
+            {restricted && m.email && <div className="person-email">{m.email}</div>}</td>
           <td>{editing?.id === m.id
             ? <input value={editing?.stake || ''} onChange={(e) => setEditing({ id: m.id, stake: e.target.value })} />
             : m.stake || <span className="faint">—</span>}</td>
           <td><Badge kind={LIST_STATUS[m.status][0]}>{LIST_STATUS[m.status][1]}</Badge></td>
-          <td style={{ whiteSpace: 'nowrap' }}>{editing?.id === m.id
+          {!restricted && <td style={{ whiteSpace: 'nowrap' }}>{editing?.id === m.id
             ? <><button className="btn sm primary" disabled={busy} onClick={() => run(async () => { await api.patch(`/registry/mailing-list/${m.id}`, { stake: editing?.stake || '' }); setEditing(null); refreshAll() })}>Save</button>{' '}
                 <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button></>
             : <><button className="btn sm" onClick={() => setEditing({ id: m.id, stake: m.stake || '' })}>Edit</button>{' '}
-                <button className="btn sm danger" disabled={busy} onClick={() => run(async () => { await api.del(`/registry/mailing-list/${m.id}`); refreshAll() })}>Remove</button></>}</td></tr>)}
-        {!a.mailing_list.length && <tr><td colSpan={4} className="muted">Nobody is on this system's mailing list yet.</td></tr>}</tbody></table>
+                <button className="btn sm danger" disabled={busy} onClick={() => run(async () => { await api.del(`/registry/mailing-list/${m.id}`); refreshAll() })}>Remove</button></>}</td>}</tr>)}
+        {!a.mailing_list.length && <tr><td colSpan={restricted ? 3 : 4} className="muted">Nobody is on this system's mailing list yet.</td></tr>}</tbody></table>
+      {!restricted && <>
       <div className="inline-actions">
         <select value={add.person} onChange={(e) => setAdd({ ...add, person: e.target.value })}><option value="">Add a stakeholder…</option>
           {people.filter((p) => p.active && !listed.has(p.id)).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.title || ROLE[p.role]}</option>)}</select>
@@ -242,31 +271,32 @@ function MailingList({ a, people }: { a: any; people: any[] }) {
       {preview && <pre className="note" style={{ whiteSpace: 'pre-wrap', marginTop: 8, background: 'var(--bg)' }}>{preview}</pre>}
       {result && <div className="note ok" style={{ marginTop: 8 }}><b>Summary sent to {result.sent.length}</b>{result.sent.length ? `: ${result.sent.map((x: any) => x.name).join(', ')}` : ''}
         {result.skipped.length > 0 && <p style={{ margin: '4px 0 0' }}>Not sent: {result.skipped.map((x: any) => `${x.name} (${x.reason})`).join(', ')}</p>}</div>}
-      {error && <p className="err">{error}</p>}
+      {error && <p className="err">{error}</p>}</>}
     </div>
   )
 }
 
-function System({ a, people, onEdit, focused = false }: { a: any; people: any[]; onEdit: () => void; focused?: boolean }) {
+function System({ a, people, onEdit, restricted = false, focused = false }: { a: any; people: any[]; onEdit: () => void; restricted?: boolean; focused?: boolean }) {
   const inv = a.inventory
   const details = useRef<HTMLDetailsElement>(null)
   useEffect(() => { if (focused && details.current) details.current.open = true }, [focused])
   return (
     <details ref={details} id={`asset-${a.id}`} className={`card system-card ${focused ? 'focus-record' : ''}`}>
       <summary className="system-summary"><div className="system-summary-main"><h2><span className="chev">▸</span>{a.name}</h2>
-        <div className="faint">{[a.internet_facing && 'Internet-facing', a.critical && 'Critical', a.customer_facing && 'Customer-facing', a.data_sensitivity].filter(Boolean).join(' · ')}
-          {' · '}{a.owner || 'no named owner'} · {a.open_tasks.length} open task{a.open_tasks.length === 1 ? '' : 's'} · {a.claims.length} claim{a.claims.length === 1 ? '' : 's'}</div></div>
+        <div className="faint">{restricted ? <>{a.business_unit || 'no department'} · {a.owner || 'no named owner'}</> : <>
+          {[a.internet_facing && 'Internet-facing', a.critical && 'Critical', a.customer_facing && 'Customer-facing', a.data_sensitivity].filter(Boolean).join(' · ')}
+          {' · '}{a.owner || 'no named owner'} · {a.open_tasks.length} open task{a.open_tasks.length === 1 ? '' : 's'} · {a.claims.length} claim{a.claims.length === 1 ? '' : 's'}</>}</div></div>
         <div className="system-summary-actions">
           {a.attestation.state === 'due_soon' && <Badge kind="cd">attestation due soon</Badge>}
           {a.updates_needed > 0 && <Badge kind="over">{a.updates_needed} update{a.updates_needed > 1 ? 's' : ''} needed</Badge>}
           <Badge kind={a.owner_valid ? 'info' : 'over'}>{a.owner_valid ? 'ownership valid' : 'ownership invalid'}</Badge>
           {/* keep the click from toggling the section */}
-          <button className="btn sm" onClick={(e) => { e.preventDefault(); onEdit() }}>Edit</button></div></summary>
-      <div className="system-overview">
+          {!restricted && <button className="btn sm" onClick={(e) => { e.preventDefault(); onEdit() }}>Edit</button>}</div></summary>
+      <div className="system-overview" style={restricted ? { gridTemplateColumns: '1fr' } : undefined}>
         <div className="system-panel">
           <div className="faint">Accountability chain (who gets routed and escalated to)</div>
           <p style={{ margin: '4px 0' }}>
-            <b style={a.owner_active ? {} : { textDecoration: 'line-through' }}>{a.owner || 'no named owner'}</b> → {a.manager || '—'} → {a.bu_head || '—'}
+            <b style={a.owner_active ? {} : { textDecoration: 'line-through' }}>{a.owner || 'no named owner'}</b> → {a.manager || '—'} → {a.bu_head ? `${a.bu_head} (head)` : '—'}
           </p>
           <Link className="btn sm" to={a.owner_id ? `/registry?tab=People&person=${a.owner_id}` : '/registry?tab=People'}>
             {a.owner_id ? `Check ${a.owner}'s people record` : 'Open people directory'}
@@ -283,16 +313,17 @@ function System({ a, people, onEdit, focused = false }: { a: any; people: any[];
                 : a.confirmation.due ? `New owner must confirm by ${fmt(a.confirmation.due, true)}`
                   : 'Owner confirmation needs a due date'}
             </p>}
-          {!a.in_scanner_targets && <p className="err">Not in scanner targets (coverage gap)</p>}
-          <OwnerControls a={a} people={people} />
+          {!restricted && !a.in_scanner_targets && <p className="err">Not in scanner targets (coverage gap)</p>}
+          {!restricted && <OwnerControls a={a} people={people} />}
         </div>
-        <div className="system-panel">
+        {!restricted && <div className="system-panel">
           <div className="faint">Component inventory <Badge kind={inv.state === 'current' ? 'info' : 'over'}>inventory {inv.state}</Badge></div>
           <div>{inv.verified_at ? <>verified {fmt(inv.verified_at)} · {inv.method?.replace(/_/g, ' ')}</> : 'never verified'}</div>
           {inv.verified_at && <div className="faint">{inv.scope.join(', ')}</div>}
           <VersionControls a={a} />
-        </div>
+        </div>}
       </div>
+      {restricted ? <MailingList a={a} people={people} restricted /> : <>
       <div className="system-data-section"><h3>Components</h3>
         <table style={{ marginTop: 4 }}><thead><tr><th>Component</th><th>Version on record</th><th>Install path</th><th>Update status</th></tr></thead><tbody>
           {a.components.map((c: any) => <tr key={c.name}><td>{c.name}</td><td className="mono">{c.version}</td><td className="mono faint">{c.path || '—'}</td>
@@ -319,7 +350,7 @@ function System({ a, people, onEdit, focused = false }: { a: any; people: any[];
           {a.claims.map((c: any) => <tr key={c.id}><td><Link to={`/claims/${c.id}`}>{c.type}</Link></td><td>{c.value?.replace(/_/g, ' ') || '—'}</td>
             <td><Badge kind={c.status === 'active' ? 'info' : 'over'}>{c.status}</Badge></td></tr>)}
           {!a.claims.length && <tr><td colSpan={3} className="muted">No claims.</td></tr>}</tbody></table></div>
-      <MailingList a={a} people={people} />
+      <MailingList a={a} people={people} /></>}
     </details>
   )
 }
@@ -354,8 +385,10 @@ export default function Registry() {
     && (!g('bu') || p.business_unit === g('bu')) && (!g('role') || p.role === g('role'))
     && (!g('status') || (g('status') === 'active' ? p.active && p.deliverable : g('status') === 'left' ? !p.active : p.active && !p.deliverable))))
 
+  // roles without security clearance get ownership only: the server leaves out components, tasks, exposure and discovery
+  const restricted = !!r.restricted
   const assets = r.assets.filter((a: any) => a.id === focusAsset || (has(q, a.name, a.owner, a.manager, a.bu_head, a.business_unit, a.legacy_contact,
-      a.components.map((c: any) => `${c.name} ${c.version}`).join(' '), a.open_tasks.map((t: any) => t.ref).join(' '))
+      (a.components || []).map((c: any) => `${c.name} ${c.version}`).join(' '), (a.open_tasks || []).map((t: any) => t.ref).join(' '))
     && (!g('bu') || a.business_unit === g('bu'))
     && (!g('owner') || (g('owner') === 'valid') === a.owner_valid)
     && (!g('inv') || a.inventory.state === g('inv'))
@@ -371,8 +404,6 @@ export default function Registry() {
   r.people.filter((p: any) => has(q, p.name, p.title, ROLE[p.role], p.owns.join(' ')) && (!g('bu') || p.business_unit === g('bu')))
     .forEach((p: any) => { for (let x = p; x && !show.has(x.id); x = byId.get(x.manager_id)) show.add(x.id) })
 
-  const findings = r.findings.filter((x: any) => has(q, x.subject, x.detail, x.kind, x.assigned_to)
-    && (!g('sev') || x.severity === g('sev')) && (!g('kind') || x.kind === g('kind')))
   const discovered = r.discovered.filter((d: any) => has(q, d.name, d.source))
 
   const common = { q, setQ: set('q'), onClear: clear }
@@ -385,26 +416,36 @@ export default function Registry() {
           <div className="stat">{r.assets.length} systems · {active} staff</div></div></div>
       <div className="registry-topbar">
         <div className="tabs" role="group" aria-label="Registry sections">{TABS.map((t) => (
-          <button key={t} className={`btn ${tab === t ? 'primary' : ''}`} aria-pressed={tab === t} onClick={() => setTab(t)}>{t}{t === 'Findings' ? ` (${r.findings.length})` : ''}</button>))}</div>
+          <button key={t} className={`btn ${tab === t ? 'primary' : ''}`} aria-pressed={tab === t} onClick={() => setTab(t)}>{t}</button>))}</div>
       </div>
 
       {tab === 'Systems' && <>
-        <Controls {...common} shown={assets.length} total={r.assets.length} action={<button className="btn primary" onClick={() => setEditSys({})}>Add system</button>} selects={[
+        <Controls {...common} shown={assets.length} total={r.assets.length} action={!restricted && <button className="btn primary" onClick={() => setEditSys({})}>Add system</button>} selects={[
           { label: 'Department', value: g('bu'), set: set('bu'), options: units },
           { label: 'Ownership', value: g('owner'), set: set('owner'), options: [['valid', 'Valid'], ['invalid', 'Invalid']] },
-          { label: 'Inventory', value: g('inv'), set: set('inv'), options: [['current', 'Current'], ['stale', 'Stale'], ['none', 'None']] },
-          { label: 'Exposure', value: g('exposure'), set: set('exposure'), options: [['internet', 'Internet-facing'], ['critical', 'Critical']] },
-          { label: 'Open remediation', value: g('work'), set: set('work'), options: [['tasks', 'Has open remediation'], ['none', 'None']] },
-          { label: 'Versions', value: g('updates'), set: set('updates'), options: [['needed', 'Update needed'], ['current', 'No known update needed']] }]} />
-        {outdated.length > 0 && <div className="note fail" style={{ marginTop: 14 }}>
+          ...(restricted ? [] : [
+            { label: 'Inventory', value: g('inv'), set: set('inv'), options: [['current', 'Current'], ['stale', 'Stale'], ['none', 'None']] as [string, string][] },
+            { label: 'Exposure', value: g('exposure'), set: set('exposure'), options: [['internet', 'Internet-facing'], ['critical', 'Critical']] as [string, string][] },
+            { label: 'Open remediation', value: g('work'), set: set('work'), options: [['tasks', 'Has open remediation'], ['none', 'None']] as [string, string][] },
+            { label: 'Versions', value: g('updates'), set: set('updates'), options: [['needed', 'Update needed'], ['current', 'No known update needed']] as [string, string][] }])]} />
+        {!restricted && outdated.length > 0 && <div className="note fail" style={{ marginTop: 14 }}>
           <b>{outdated.length} system{outdated.length > 1 ? 's' : ''} running a version with a known advisory</b>
           <p style={{ margin: '4px 0 0' }}>{outdated.map((a: any) => `${a.name} (${a.components.filter((c: any) => c.advisories.length)
             .map((c: any) => `${c.name} ${c.version} → ${c.update_to || 'fixed release'}`).join(', ')})`).join(' · ')}</p>
           {g('updates') !== 'needed' && <button className="btn sm" style={{ marginTop: 8 }} onClick={() => set('updates')('needed')}>Show only these</button>}</div>}
-        <OwnershipMap assets={assets} />
-        {assets.map((a: any) => <System key={`${a.id}-${a.id === focusAsset}`} a={a} people={r.people}
+        <OwnershipMap assets={assets} restricted={restricted} />
+        {assets.map((a: any) => <System key={`${a.id}-${a.id === focusAsset}`} a={a} people={r.people} restricted={restricted}
           focused={a.id === focusAsset} onEdit={() => setEditSys(a)} />)}
-        {!assets.length && <p className="muted" style={{ marginTop: 14 }}>No systems match.</p>}</>}
+        {!assets.length && <p className="muted" style={{ marginTop: 14 }}>No systems match.</p>}
+        {!restricted && <div className="card" style={{ marginTop: 14 }}>
+          <div className="sec"><h2>Discovery reconciliation</h2>
+            <button className="btn sm" disabled={busy} onClick={() => run(async () => { await api.post('/sweep'); refreshAll() })}>Run check now</button></div>
+          <p className="muted" style={{ marginTop: 0 }}>The register is checked against discovery every minute. An unregistered internet-facing asset raises a High finding for the CISO; registering it resolves the finding.</p>
+          <table><thead><tr><th>Seen by discovery</th><th>Source</th><th>Exposure</th><th>In register</th><th></th></tr></thead><tbody>
+            {discovered.map((d: any) => <tr key={d.name}><td>{d.name}</td><td>{d.source}</td><td>{d.internet_facing ? 'Internet-facing' : 'Internal'}</td>
+              <td>{d.registered ? '✓' : <b className="err">✕ unregistered</b>}</td>
+              <td>{!d.registered && <button className="btn sm primary" onClick={() => setEditSys({ name: d.name })}>Register</button>}</td></tr>)}</tbody></table>
+          {runError && <p className="err">{runError}</p>}</div>}</>}
 
       {tab === 'Organisations' && <>
         <Controls {...common} shown={bus.length} total={r.business_units.length} action={<button className="btn primary" onClick={() => setEditDept({})}>Add department</button>} selects={[
@@ -437,23 +478,6 @@ export default function Registry() {
                 <button className="btn sm danger" onClick={() => setRemoving(p)}>Remove</button></div>}</td></tr>)}
             {!people.length && <tr><td colSpan={6} className="muted">No people match.</td></tr>}</tbody></table></div></div></>}
 
-      {tab === 'Findings' && <>
-        <Controls {...common} shown={findings.length} total={r.findings.length} selects={[
-          { label: 'Severity', value: g('sev'), set: set('sev'), options: uniq(r.findings.map((x: any) => x.severity)) },
-          { label: 'Type', value: g('kind'), set: set('kind'), options: uniq(r.findings.map((x: any) => x.kind)).map((x) => [x, x.replace(/_/g, ' ')] as [string, string]) }]} />
-        <div className="card" style={{ marginTop: 14 }}>
-          <table><thead><tr><th>Finding</th><th>Severity</th><th>Assigned to</th></tr></thead><tbody>
-            {findings.map((x: any) => <tr key={x.id}><td><b>{x.subject}</b><div className="muted">{x.detail}</div><div className="faint">{x.kind.replace(/_/g, ' ')}</div></td>
-              <td>{x.severity}</td><td>{x.assigned_to || '—'}</td></tr>)}
-            {!findings.length && <tr><td colSpan={3} className="muted">No findings match.</td></tr>}</tbody></table>
-          <div className="sec" style={{ marginTop: 16 }}><h2>Discovery reconciliation</h2>
-            <button className="btn sm" disabled={busy} onClick={() => run(async () => { await api.post('/sweep'); refreshAll() })}>Run check now</button></div>
-          <p className="muted" style={{ marginTop: 0 }}>The register is checked against discovery every minute. An unregistered internet-facing asset raises a High finding for the CISO; registering it resolves the finding.</p>
-          <table><thead><tr><th>Seen by discovery</th><th>Source</th><th>Exposure</th><th>In register</th><th></th></tr></thead><tbody>
-            {discovered.map((d: any) => <tr key={d.name}><td>{d.name}</td><td>{d.source}</td><td>{d.internet_facing ? 'Internet-facing' : 'Internal'}</td>
-              <td>{d.registered ? '✓' : <b className="err">✕ unregistered</b>}</td>
-              <td>{!d.registered && <button className="btn sm primary" onClick={() => setEditSys({ name: d.name })}>Register</button>}</td></tr>)}</tbody></table>
-          {runError && <p className="err">{runError}</p>}</div></>}
       {editing && <PersonModal person={editing.id ? editing : undefined} people={r.people} units={r.business_units} onClose={() => setEditing(null)} />}
       {removing && <RemoveModal person={removing} onClose={() => setRemoving(null)} />}
       {editDept && <DeptModal dept={editDept.id ? editDept : undefined} people={r.people} onClose={() => setEditDept(null)} />}
