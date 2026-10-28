@@ -28,7 +28,9 @@ To show change detection, open **Documents → Files**, pick `FTC_Safeguards_Rul
 **Use as a new version** of the FTC Safeguards Rule: the 2016 → 2022 comparison finds changed, renumbered, moved and
 removed clauses, and supersedes the two seeded obligations built on the 2016 wording.
 
-There is no sign-in and no role-based view: the Risk & Compliance team runs PoliBridge and can see and edit everything. Actions that belong to
+There is no sign-in. Instead, the "Viewing as" menu at the bottom of the sidebar switches between demo roles: Super admin (every feature),
+Risk & Compliance, System owner, Independent reviewer, Internal audit and Executive. Each role sees only its pages, and the backend refuses
+changes the role may not make; the roles are defined in `backend/app/api/access.py`. Actions that belong to
 an owner or an approver (acknowledging, signing off, submitting evidence, approving a risk acceptance) are recorded for that named person, and the
 audit log notes that Risk & Compliance entered them. The control rules that compare people still apply, for example the evidence reviewer must
 be someone other than whoever submitted or fixed it.

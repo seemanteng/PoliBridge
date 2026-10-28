@@ -35,8 +35,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .demo button { background: #232a36; color: #dfe3ea; border: 1px solid #364051; border-radius: 5px; padding: 3px 8px; font-size: 12px; }
 .demo button:hover { background: #2d3645; }
 .who { border-top: 1px solid #334562; padding: 16px 21px; }
-.who select { width: 100%; margin-bottom: 6px; background: #232a36; color: #fff; border: 1px solid #364051; border-radius: 5px; padding: 4px; }
+.who select { width: 100%; margin-bottom: 6px; background-color: #232a36; color: #fff; border: 1px solid #364051; border-radius: 5px; padding: 4px 30px 4px 8px; background-position: right 10px center;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23c1cde0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.who select::picker(select) { background: #232a36; color: #fff; border-color: #364051; }
+.who option:hover, .who option:focus-visible { background: #2d3645; }
 .who .t { font-size: 12px; color: #c1cde0; }
+.note.view-only { margin-bottom: 16px; }
 main { flex: 1; min-width: 0; width: 100%; padding: 34px clamp(22px, 3vw, 46px) 72px; max-width: 1600px; margin: 0 auto; }
 
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 5px; }
@@ -227,6 +231,19 @@ code { font: 12px var(--mono); background: #edf2f8; padding: 2px 5px; border-rad
 .canary-run-date { margin-top: 3px; color: #4d5e77; font-size: 13px; font-weight: 550; line-height: 1.4; white-space: nowrap; }
 textarea, input, select { font: inherit; border: 1px solid #c7d3e4; border-radius: 8px; padding: 9px 11px; width: 100%; min-height: 39px; background: #fff; color: var(--ink); }
 textarea:hover, input:hover, select:hover { border-color: #9aafd3; }
+/* draw our own chevron so it sits inset from the right edge instead of hugging the border */
+select { appearance: none; -webkit-appearance: none; padding-right: 36px; cursor: pointer; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%234d5e77' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 13px center; background-size: 12px 8px; }
+/* browsers with customizable select (Chromium) also get a rounded menu; others keep their native menu */
+@supports (appearance: base-select) {
+  select, ::picker(select) { appearance: base-select; }
+  select::picker-icon { display: none; }
+  ::picker(select) { margin-top: 4px; padding: 5px; border: 1px solid #c7d3e4; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(28, 52, 89, .16); }
+  option { padding: 7px 10px; border-radius: 6px; }
+  option:hover, option:focus-visible { background: #eef3fb; outline: none; }
+  option:checked { font-weight: 600; }
+}
 input::placeholder, textarea::placeholder { color: #718099; }
 label { display: block; font-size: 12.5px; font-weight: 650; color: #344862; margin: 13px 0 5px; }
 .overlay { position: fixed; inset: 0; background: rgba(14, 25, 44, .56); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 20; backdrop-filter: blur(3px); }

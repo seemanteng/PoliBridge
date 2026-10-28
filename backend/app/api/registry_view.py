@@ -1,5 +1,5 @@
 """Read model for the Registry page: people, org structure, business units and systems, with the links between them
-(owner -> manager -> BU head, open tasks, claims, findings)."""
+(owner -> manager -> BU head, open tasks, claims)."""
 from datetime import timedelta
 
 import re
@@ -15,6 +15,7 @@ from ..config import TIMINGS
 from ..identity import valid_email
 from ..services import assessment, assignment, audit, assurance, common, registry as reg, views
 from .routes import actor, approver_for, on_behalf
+from . import access
 
 router = APIRouter(prefix="/api/registry")
 
@@ -22,8 +23,13 @@ def _iso(d):
     return d.isoformat() if d else None
 
 
+# Per-system detail that describes the security posture rather than who owns it; left out for uncleared roles.
+SECURITY_FIELDS = ("app_roots", "internet_facing", "critical", "customer_facing", "data_sensitivity", "inventory",
+                   "in_scanner_targets", "components", "version_history", "updates_needed", "open_tasks", "claims")
+
+
 @router.get("")
-def registry(db=Depends(get_db)):
+def registry(db=Depends(get_db), security: bool = Depends(access.cleared)):
     now = clock.now()
     people = {p.id: p for p in db.scalars(select(M.Person))}
     bus = list(db.scalars(select(M.BusinessUnit)))
@@ -101,7 +107,7 @@ def registry(db=Depends(get_db)):
             "owner": owner.name if owner else None, "owner_active": bool(owner and owner.active),
             "owner_valid": ok, "owner_issue": why or None, "legacy_contact": a.legacy_contact,
             "manager": name(owner.manager_id) if owner else None,
-            "bu_head": name(bu.head_id) if bu else None,
+            "bu_head": name(bu.head_id) if bu else None, "bu_head_id": bu.head_id if bu else None,
             "ownership_attested_at": _iso(a.ownership_attested_at),
             "attestation": {"state": reg.attestation_state(a), "due": _iso(reg.attestation_due(a))},
             "confirmation": {"state": assurance.confirmation_state(db, a),
@@ -115,15 +121,15 @@ def registry(db=Depends(get_db)):
             "mailing_list": lists.get(a.id, []), "last_summary_at": last_sent.get(a.id),
         })
 
-    findings = [{"id": f.id, "kind": f.kind, "severity": f.severity, "subject": f.subject, "detail": f.detail,
-                 "assigned_to": name(f.assigned_to_id), "created_at": _iso(f.created_at)}
-                for f in db.scalars(select(M.Finding).where(M.Finding.status == "open", M.Finding.is_test.is_(False)))]
     discovered = [{"name": d.name, "source": d.source, "internet_facing": d.internet_facing,
                    "registered": any(a.name == d.name for a in assets)}
                   for d in db.scalars(select(M.DiscoveredAsset))]
+    if not security:
+        out_assets = [{k: v for k, v in a.items() if k not in SECURITY_FIELDS} for a in out_assets]
+        discovered = []
     return {"now": _iso(now), "people": out_people,
             "business_units": [{"id": b.id, "name": b.name, "head": name(b.head_id), "head_id": b.head_id} for b in bus],
-            "assets": out_assets, "findings": findings, "discovered": discovered}
+            "assets": out_assets, "discovered": discovered, "restricted": not security}
 
 
 # ---------- editing: people and system ownership ----------

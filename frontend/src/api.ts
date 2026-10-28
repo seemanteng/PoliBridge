@@ -1,5 +1,6 @@
-// Thin fetch wrapper. There is no sign-in: PoliBridge is operated by the Risk & Compliance team, who can see and edit
-// everything, so the backend acts as that team and records owner actions as entered on the owner's behalf.
+// Thin fetch wrapper. There is no sign-in: the demo user picks a role in the sidebar, and every request carries it in
+// X-Role so the backend can refuse changes that role may not make. Owner actions are still recorded as entered on the
+// owner's behalf.
 import { useCallback, useEffect, useState } from 'react'
 
 export type J = any // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -7,10 +8,19 @@ export type J = any // eslint-disable-line @typescript-eslint/no-explicit-any
 
 export class ApiError extends Error {}
 
+const ROLE_KEY = 'polibridge.role'
+let role = (() => { try { return localStorage.getItem(ROLE_KEY) || 'super_admin' } catch { return 'super_admin' } })()
+export const getRole = () => role
+export function setRole(r: string) {
+  role = r
+  try { localStorage.setItem(ROLE_KEY, r) } catch { /* the choice just won't survive a reload */ }
+  refreshAll()
+}
+
 async function call(method: string, path: string, body?: unknown): Promise<J> {
   const r = await fetch('/api' + path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Role': role },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const text = await r.text()
@@ -20,7 +30,7 @@ async function call(method: string, path: string, body?: unknown): Promise<J> {
 }
 
 async function upload(path: string, file: File): Promise<J> {
-  const r = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+  const r = await fetch('/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Role': role }, body: file })
   const text = await r.text()
   const data = text ? JSON.parse(text) : null
   if (!r.ok) throw new ApiError(typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail ?? r.statusText))

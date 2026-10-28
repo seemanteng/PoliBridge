@@ -214,21 +214,6 @@ def reconcile(db=Depends(get_db)):
     return sers(f)
 
 
-@router.get("/findings")
-def findings(include_tests: bool = False, db=Depends(get_db)):
-    q = select(M.Finding).order_by(M.Finding.id.desc())
-    return sers(db.scalars(q))
-
-
-@router.post("/findings/{fid}/resolve")
-def resolve_finding(fid: int, db=Depends(get_db), me=Depends(actor)):
-    f = one(db, M.Finding, fid)
-    f.status = "resolved"
-    registry.audit.log(db, me.directory_id, "finding", f.id, "resolved")
-    db.commit()
-    return ser(f)
-
-
 @router.get("/claims")
 def claims(claim_type: str | None = None, status: str | None = None, db=Depends(get_db)):
     q = select(M.Claim).order_by(M.Claim.id.desc())

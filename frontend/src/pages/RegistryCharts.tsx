@@ -85,7 +85,7 @@ type N = { key: string; col: number; label: string; sub?: string; y: number; bad
 type L = { from: string; to: string; bad?: boolean }
 
 /** System → owner → manager → business-unit head, as a four-column flow. Hover any box to trace its line. */
-export function OwnershipMap({ assets }: { assets: any[] }) {
+export function OwnershipMap({ assets, restricted = false }: { assets: any[]; restricted?: boolean }) {
   const [hover, setHover] = useState<string | null>(null)
   const COLW = [290, 196, 176, 196], NH = 50, GAP = 56, ROW = 62
   const heads = ['System', 'Owner', 'Manager · escalation at 24h', 'Business-unit head']
@@ -95,7 +95,8 @@ export function OwnershipMap({ assets }: { assets: any[] }) {
     const link = (from: string, to: string, bad?: boolean) => { const k = from + '>' + to; if (!seen.has(k)) { seen.add(k); links.push({ from, to, bad }) } }
     assets.forEach((a, i) => {
       const sk = 's' + a.id
-      const flags = [a.internet_facing && 'internet-facing', a.open_tasks.length && `${a.open_tasks.length} open task${a.open_tasks.length > 1 ? 's' : ''}`,
+      // without security clearance there are no exposure or task flags, so the department stands in
+      const flags = restricted ? a.business_unit : [a.internet_facing && 'internet-facing', a.open_tasks.length && `${a.open_tasks.length} open task${a.open_tasks.length > 1 ? 's' : ''}`,
         a.inventory.state !== 'current' && (a.inventory.state === 'none' ? 'no inventory' : 'inventory stale')].filter(Boolean).join(' · ')
       nodes.set(sk, { key: sk, col: 0, label: a.name, sub: flags || 'no open work', y: i * ROW, bad: !a.owner_valid, sysId: a.id,
         bar: a.owner_valid ? 'var(--green)' : 'var(--red)', tip: `${a.name}\n${a.owner_issue || 'ownership valid'}` })
@@ -122,7 +123,7 @@ export function OwnershipMap({ assets }: { assets: any[] }) {
       ns.forEach((n, i) => { if (i && n.y < ns[i - 1].y + ROW) n.y = ns[i - 1].y + ROW })
     }
     return { nodes, links, H: Math.max(...[...nodes.values()].map((n) => n.y)) + NH }
-  }, [assets])
+  }, [assets, restricted])
 
   const lit = useMemo(() => {
     if (!hover) return null
