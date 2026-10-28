@@ -27,6 +27,7 @@ attestation_due_soon_days: 14       # owners are reminded to re-attest inside th
 component_data_stale_days: 30       # inventory older than this is "stale" (A3)
 scan_evidence_validity_days: 14     # critical internet-facing scan evidence (F1)
 risk_acceptance_max_days: 90
+signoff_dispute_escalate_hours: 48  # remediation sign-offs still disagree after this: risk owner, senior management, board
 impact_modifier_threshold: 4        # approved modifier combination that makes High
 
 # Source intake

@@ -241,6 +241,9 @@ def claims(claim_type: str | None = None, status: str | None = None, db=Depends(
         d = ser(c)
         d["asset"] = db.get(M.Asset, c.asset_id).name if c.asset_id else None
         d["dependents"] = sers(db.scalars(select(M.Dependency).where(M.Dependency.claim_id == c.id)))
+        so = views.claim_signoffs(db, c)
+        d["signoffs"] = ({"signed": sum(1 for s in so["signoffs"] if s["signed_by"]), "needed": len(so["signoffs"]),
+                          "disputes": len(so["disputes"])} if so else None)
         out.append(d)
     return out
 
@@ -610,6 +613,23 @@ class Review(BaseModel):
 def review(eid: int, body: Review, db=Depends(get_db), me=Depends(actor)):
     ev = guarded(lambda: closure.review_evidence(db, one(db, M.Evidence, eid), me, body.approve, body.comment))(db)
     return ser(ev)
+
+
+class DisputeIn(BaseModel):
+    role: str  # whose sign-off disagrees: system_owner | security | compliance | legal
+    reason: str
+
+
+@router.post("/tasks/{tid}/signoff-dispute")
+def signoff_dispute(tid: int, body: DisputeIn, db=Depends(get_db), me=Depends(actor)):
+    """A signer disagrees: the claim goes back to Cannot Determine and the disagreement is escalated."""
+    t = one(db, M.Task, tid)
+    signer = closure.required_signer(db, t, body.role) if body.role in closure.needed_signoffs(t) else None
+    if signer is None:
+        raise HTTPException(400, "nobody holds that sign-off on this task")
+    person = on_behalf(db, me, signer, "task", tid, f"dispute {body.role}")
+    guarded(lambda: closure.dispute_signoff(db, t, body.role, person, body.reason))(db)
+    return {"signoffs": closure.signoff_view(db, t), "status": t.status, "dispute": t.signoff_dispute}
 
 
 class RiskIn(BaseModel):

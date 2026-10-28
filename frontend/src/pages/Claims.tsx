@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, Loading, Modal, useAction } from '../ui'
+import { ClaimClosure } from './Signoffs'
 
 const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance' }
 
@@ -78,9 +79,12 @@ export function ClaimList() {
       {adding && <NewClaim onClose={() => setAdding(false)} />}
       <div className="card" style={{ marginTop: 16 }}>
         {!cs ? <Loading error={error} /> : (
-          <table><thead><tr><th>Claim</th><th>Type</th><th>Asset</th><th>Status</th><th>Expiry</th></tr></thead>
+          <table><thead><tr><th>Claim</th><th>Type</th><th>Asset</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
             <tbody>{cs.map((c: any) => (
               <tr key={c.id}><td><Link to={`/claims/${c.id}`}><b>{c.statement}</b></Link></td><td>{TYPE[c.claim_type]}</td><td>{c.asset}</td>
+                <td>{c.signoffs ? <span title="Asset owner (IT), Information Security and any impact sign-offs">
+                  {c.signoffs.signed}/{c.signoffs.needed} signed{c.signoffs.disputes > 0 && <span className="faint"> · {c.signoffs.disputes} disagreement{c.signoffs.disputes > 1 ? 's' : ''}</span>}</span>
+                  : <span className="muted">—</span>}</td>
                 <td><Badge kind={c.status === 'expired' ? 'cd' : c.status === 'active' ? 'info' : ''}>{c.status === 'expired' ? '? Lapsed' : c.status}</Badge></td>
                 <td className="mono">{fmt(c.expiry, true)}</td></tr>))}</tbody></table>)}
       </div>
@@ -113,6 +117,8 @@ export function ClaimDetail() {
           <i style={{ width: `${100 - Math.max(nowPct, warnPct)}%`, background: lapsed ? '#a58be0' : '#e6e4dc' }} /></div>
         <div className="mono faint" style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span>{fmt(c.life.start, true)} · accepted</span><span className={lapsed ? 'purple' : ''}>{fmt(c.expiry, true)} · {lapsed ? 'lapsed' : 'expires'}</span></div></div>
+
+      <ClaimClosure c={c.closure} />
 
       {c.dependents.length > 0 && <div className="card" style={{ marginTop: 16 }}>
         <div className="sec"><h2>{lapsed ? 'What the lapse reopened' : 'What depends on this claim'}</h2><span className="faint">Rule F2 · each flagged to its owner</span></div>

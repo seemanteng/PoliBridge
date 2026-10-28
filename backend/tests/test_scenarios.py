@@ -161,6 +161,9 @@ def test_scoped_absence_evidence_needs_independent_review(db, who):
     except PermissionError:
         pass
     closure.review_evidence(db, ev, who("rverma"), True)
+    # accepted evidence is not enough: the asset owner and Information Security must both sign off (§6.5)
+    assert claim_for(db, ob, "ACIS Dispute Portal").value == "cannot_determine" and t.status == "open"
+    sign_required(db, t)
     assert claim_for(db, ob, "ACIS Dispute Portal").value == "does_not_apply"
     assert t.status == "closed"
 
@@ -315,6 +318,7 @@ def test_full_closure_distinguishes_remediation(db, who):
                                     component="Apache Struts", scope=[root], method="authenticated_scan",
                                     timestamp=clock.now())
         closure.review_evidence(db, e, who("rkim"), True)
+        sign_required(db, t)
     assert ob.status == "closed"
     assert {d["disposition"] for d in closure.disposition_summary(db, ob)} == {"remediated", "superseded"}
 

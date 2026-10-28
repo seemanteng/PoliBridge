@@ -4,7 +4,8 @@ import { Badge, ImpactBadge, Loading, useAction } from '../ui'
 import Canary from './Canary'
 
 const hours = (h: number) => (h >= 48 ? `${Math.floor(h / 24)}d ${Math.round(h % 24)}h` : `${Math.round(h)}h`)
-const TYPE: Record<string, [string, string]> = { unsigned: ['cd', 'Unsigned'], overdue: ['over', 'Overdue'], interim: ['high', 'No interim control'] }
+const TYPE: Record<string, [string, string]> = { unsigned: ['cd', 'Unsigned'], overdue: ['over', 'Overdue'], interim: ['high', 'No interim control'],
+  disputed: ['over', 'Sign-offs disagree'] }
 
 export default function Alerts() {
   const [params, setParams] = useSearchParams()

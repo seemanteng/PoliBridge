@@ -187,6 +187,11 @@ def task_timeline(db, t: M.Task) -> list[dict]:
             if why == "remediation deadline missed":
                 title, tone = "Deadline missed — escalated", "bad"
                 detail = "To the accountable risk owner and senior management. Added to the next board risk report."
+            elif why == "remediation sign-off disagreement unresolved":
+                title, tone = "Disagreement unresolved — escalated", "bad"
+                detail = "To the accountable risk owner and senior management. Added to the next board risk report."
+            elif why == "remediation sign-offs disagree":
+                title, tone, detail = "Escalated to the owner's manager", "bad", "Remediation sign-offs disagree."
             else:
                 title, detail = f"Escalated to {to}", why
         elif a == "marked_fixed":
@@ -203,6 +208,18 @@ def task_timeline(db, t: M.Task) -> list[dict]:
             title = {"accepted": "Evidence accepted", "rejected": "Evidence rejected by reviewer",
                      "rejection_confirmed": "Rejection confirmed", "review_blocked": "Review blocked"}[a]
             detail = d.get("comment") or "; ".join(d.get("reasons", []))
+        elif a == "awaiting_required_signoffs":
+            title = "Waiting for sign-offs"
+            detail = ", ".join(closure.SIGNOFF_LABEL.get(k, k) for k in d.get("missing", []))
+        elif a == "required_signoff":
+            title = f"Signed off: {closure.SIGNOFF_LABEL.get(d.get('role'), d.get('role'))}"
+            detail = f"Component record: {d['record']}" if d.get("record") else None
+        elif a == "signoff_disputed":
+            title, tone = f"Sign-offs disagree — {closure.SIGNOFF_LABEL.get(d.get('role'), d.get('role'))}", "bad"
+            detail = (f"{d.get('reason')}. Claim back to Cannot Determine; evidence set aside; both sides given a task."
+                      + (" Detected automatically." if d.get("auto") else ""))
+        elif a == "signoff_dispute_resolved":
+            title, detail = "Disagreement resolved", d.get("how")
         elif a == "reopened":
             title, tone, detail = "Reopened", "lapse", d.get("because")
         elif a == "closed_superseded":
@@ -253,7 +270,12 @@ def task_detail(db, t: M.Task) -> dict:
                               f"with scope {', '.join(renewal.evidence_scope or [])} and a timestamp after the renewal. "
                               "An independent reviewer must approve it; approved, time-limited risk acceptance is another disposition."
                               if renewal else f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
-                              f"{a.name} — or approved, time-limited risk acceptance."),
+                              f"{a.name}, accepted by an independent reviewer and signed off by both the asset owner (IT) "
+                              "and Information Security — or approved, time-limited risk acceptance."),
+        "dispute": t.signoff_dispute or None,
+        "record_sources": [{"key": k, "label": v} for k, v in closure.RECORD_SOURCES.items()],
+        "current_evidence": (lambda e: {"id": e.id, "status": e.status, "purpose": e.purpose,
+                                        "observed_version": e.observed_version} if e else None)(closure.current_evidence(db, t)),
         "renewal": ({"source_claim_id": renewal.id, "scope": renewal.evidence_scope or [],
                      "method": renewal.verification_method, "statement": renewal.statement,
                      "marked_fixed": bool(t.fixed_at)} if renewal else None),
@@ -329,6 +351,25 @@ def estate(db, ob: M.Obligation) -> dict:
             "timings": TIMINGS.get(ob.impact or "High", {})}
 
 
+def claim_signoffs(db, c: M.Claim) -> dict | None:
+    """For a claim that closed a task (C5): who signed it off for each function, and any disagreements on the way."""
+    ev = db.scalar(select(M.Evidence).where(M.Evidence.claim_id == c.id))
+    t = db.get(M.Task, ev.task_id) if ev else None
+    if t is None:
+        return None
+    disputes = [{"ts": e.ts.isoformat(), "role": closure.SIGNOFF_LABEL.get(e.detail.get("role"), e.detail.get("role")),
+                 "by": _name_by_did(db, e.actor), "reason": e.detail.get("reason"), "auto": e.detail.get("auto")}
+                for e in db.scalars(select(M.AuditEvent).where(M.AuditEvent.entity == "task", M.AuditEvent.entity_id == t.id,
+                                                               M.AuditEvent.action == "signoff_disputed").order_by(M.AuditEvent.id))]
+    return {"task_id": t.id, "task_ref": task_label(t), "evidence_id": ev.id, "reviewer": _name(db, ev.reviewer_id),
+            "signoffs": closure.signoff_view(db, t), "disputes": disputes}
+
+
+def _name_by_did(db, did: str):
+    p = db.scalar(select(M.Person).where(M.Person.directory_id == did))
+    return p.name if p else did
+
+
 def claim_detail(db, c: M.Claim) -> dict:
     a = db.get(M.Asset, c.asset_id) if c.asset_id else None
     deps = []
@@ -366,7 +407,7 @@ def claim_detail(db, c: M.Claim) -> dict:
         "submitter": _name(db, c.submitter_id), "reviewer": _name(db, c.reviewer_id), "owner": _name(db, c.owner_id),
         "depends_on": ({"label": f"TLS certificate · {cert}", "expiry": c.expiry.isoformat() if c.expiry else None,
                         "expired": c.status == "expired"} if cert else None),
-        "dependents": deps, "history": hist, "reason": c.reason,
+        "dependents": deps, "history": hist, "reason": c.reason, "closure": claim_signoffs(db, c),
         "life": {"start": (c.evidence_ts or c.created_at).isoformat(), "end": c.expiry.isoformat() if c.expiry else None,
                  "now": clock.now().isoformat()},
     }
