@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
-import { Badge, Loading, Modal, useAction } from '../ui'
+import { Badge, Loading, Modal, pretty, useAction } from '../ui'
 import { ClaimClosure } from './Signoffs'
+import { Controls } from '../filters'
+import { has, uniq } from '../filterUtils'
 
-const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance' }
+const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance', source_currency: 'Source up to date' }
 
 const METHODS: [string, string][] = [['authenticated_scan', 'Authenticated scan'], ['direct_version_check', 'Direct version check'], ['sbom', 'SBOM'],
   ['sca', 'Software-composition analysis'], ['attestation', 'Attestation'], ['certificate_check', 'Certificate check'],
@@ -71,22 +73,37 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
 export function ClaimList() {
   const { data: cs, error } = useApi('/claims')
   const [adding, setAdding] = useState(false)
+  const [q, setQ] = useState('')
+  const [type, setType] = useState('')
+  const [status, setStatus] = useState('')
+  const [asset, setAsset] = useState('')
+  const [signed, setSigned] = useState('')
+  const signState = (c: any) => !c.signoffs ? 'none' : c.signoffs.disputes > 0 ? 'disputed' : c.signoffs.signed >= c.signoffs.needed ? 'complete' : 'incomplete'
+  const shown = (cs || []).filter((c: any) => (!type || c.claim_type === type) && (!status || c.status === status) && (!asset || c.asset === asset)
+    && (!signed || signState(c) === signed) && has(q, c.statement, c.asset, TYPE[c.claim_type]))
+  const clear = () => { setQ(''); setType(''); setStatus(''); setAsset(''); setSigned('') }
   return (
     <>
       <div className="head"><div><h1>Claims</h1>
         <p className="muted">Every status PoliBridge holds is a claim with scoped evidence and an expiry. Lapsed claims revert to Cannot Determine.</p></div>
         <button className="btn primary" onClick={() => setAdding(true)}>New claim</button></div>
       {adding && <NewClaim onClose={() => setAdding(false)} />}
+      {cs && <Controls q={q} setQ={setQ} shown={shown.length} total={cs.length} onClear={clear} selects={[
+        { label: 'Type', value: type, set: setType, options: uniq(cs.map((c: any) => c.claim_type)).map((k): [string, string] => [k, TYPE[k] || k]) },
+        { label: 'Status', value: status, set: setStatus, options: uniq(cs.map((c: any) => c.status)).map((k): [string, string] => [k, pretty(k)]) },
+        { label: 'Sign-offs', value: signed, set: setSigned, options: [['complete', 'All signed'], ['incomplete', 'Awaiting sign-off'], ['disputed', 'Disagreement'], ['none', 'Not applicable']] },
+        { label: 'System', value: asset, set: setAsset, options: uniq(cs.map((c: any) => c.asset)) }]} />}
       <div className="card" style={{ marginTop: 16 }}>
         {!cs ? <Loading error={error} /> : (
-          <table><thead><tr><th>Claim</th><th>Type</th><th>Asset</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
-            <tbody>{cs.map((c: any) => (
+          <table><thead><tr><th>Claim</th><th>Type</th><th>System</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
+            <tbody>{shown.map((c: any) => (
               <tr key={c.id}><td><Link to={`/claims/${c.id}`}><b>{c.statement}</b></Link></td><td>{TYPE[c.claim_type]}</td><td>{c.asset}</td>
-                <td>{c.signoffs ? <span title="Asset owner (IT), Information Security and any impact sign-offs">
+                <td>{c.signoffs ? <span title="System owner (IT), Information Security and any impact sign-offs">
                   {c.signoffs.signed}/{c.signoffs.needed} signed{c.signoffs.disputes > 0 && <span className="faint"> · {c.signoffs.disputes} disagreement{c.signoffs.disputes > 1 ? 's' : ''}</span>}</span>
                   : <span className="muted">—</span>}</td>
-                <td><Badge kind={c.status === 'expired' ? 'cd' : c.status === 'active' ? 'info' : ''}>{c.status === 'expired' ? '? Lapsed' : c.status}</Badge></td>
-                <td className="mono">{fmt(c.expiry, true)}</td></tr>))}</tbody></table>)}
+                <td><Badge kind={c.status === 'expired' ? 'cd' : c.status === 'active' ? 'info' : ''}>{c.status === 'expired' ? '? Lapsed' : pretty(c.status)}</Badge></td>
+                <td className="mono">{fmt(c.expiry, true)}</td></tr>))}
+              {!shown.length && <tr><td colSpan={6} className="muted">No claims match these filters.</td></tr>}</tbody></table>)}
       </div>
     </>
   )
@@ -106,7 +123,7 @@ export function ClaimDetail() {
     <>
       <div className="crumbs"><Link to="/claims">Claims</Link> / {c.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><Badge>{TYPE[c.type]}</Badge>
-        {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{c.status}</Badge>}</div>
+        {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{pretty(c.status)}</Badge>}</div>
       <h1>“{c.statement}”</h1>
       <p className="muted">{c.type === 'monitoring' ? 'This claim was only as good as the certificate on the inspection device. When the certificate expired, so did the claim.' : c.reason || 'Evidence life and dependants are shown below.'}</p>
 

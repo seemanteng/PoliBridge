@@ -23,7 +23,8 @@ def _asset_passages(db, ob: Obligation, asset: Asset) -> list[dict]:
     if adv is None:
         return []
     comp = next((c for c in asset.components if versions.norm(c.name) == versions.norm(adv.product)), None)
-    pid = f"{asset.name} (asset register)"
+    verified = f"{(asset.inventory_method or 'unverified').replace('_', ' ')}" + (
+        f", verified {asset.inventory_verified_at:%d %b %Y}" if asset.inventory_verified_at else "")
     if comp:
         when = f" of {asset.inventory_verified_at:%d %b %Y}" if asset.inventory_verified_at else ""
         line = (f"{asset.name} runs {comp.name} {comp.version} at {comp.install_path or 'an unrecorded path'}, "
@@ -32,9 +33,10 @@ def _asset_passages(db, ob: Obligation, asset: Asset) -> list[dict]:
         line = (f"{asset.name} has no current component record for {adv.product}, so whether it runs an affected "
                 f"version cannot be determined.")
     roots = ", ".join(r.rstrip("/") + "/**" for r in asset.app_roots or []) or "every application folder"
-    return [{"id": pid, "text": line},
-            {"id": pid, "text": f"Evidence for {asset.name} must cover {roots} and use an authenticated scan or a "
-                                f"direct version check."}]
+    return [{"id": f"{asset.name} · component inventory ({verified})", "text": line, "asset": True, "roots": roots, "has_comp": bool(comp)},
+            {"id": f"{asset.name} · registered application folders",
+             "text": f"Evidence for {asset.name} must cover {roots} and use an authenticated scan or a "
+                     f"direct version check.", "asset": True, "roots": roots}]
 
 
 def _passages(db, ob: Obligation, asset: Asset | None = None) -> list[dict]:
@@ -89,12 +91,21 @@ def verify_grounding(text: str, citations: list[dict], passages: list[dict]) -> 
 
 
 def _stub(ob: Obligation, role: str, passages: list[dict], asset: Asset | None = None) -> dict:
-    if asset is not None:  # the asset's own record, the fixed version, and the evidence it needs
-        own = [p for p in passages if p["id"].endswith("(asset register)")]
+    if asset is not None:  # concrete instructions, each cited to the register data behind it
+        own = [p for p in passages if p.get("asset")]
         fix = next((p for p in passages if "Fixed version" in p["text"]), None)
-        use = own[:1] + ([fix] if fix and "no current component record" not in own[0]["text"] else []) + own[1:2]
-        return {"text": f"For the {role} of {asset.name}: " + " ".join(p["text"] for p in use),
-                "citations": [{"source": p["id"], "quote": p["text"]} for p in use]}
+        rec, scope = own[0], own[1]
+        check = f"Scan {scope['roots']} on {asset.name} with an authenticated scan or a direct version check, and submit the result as evidence."
+        if rec.get("has_comp") and fix:
+            text = f"{rec['text']}\n{fix['text']}\nIf it is on an affected version, patch it to the fixed version.\n{check}"
+            use = [rec, fix, scope]
+        elif rec.get("has_comp"):
+            text = f"{rec['text']}\n{check}"
+            use = [rec, scope]
+        else:
+            text = f"We cannot yet tell whether {asset.name} is affected, because its inventory has no current record of the component.\n{check}"
+            use = [rec, scope]
+        return {"text": text, "citations": [{"source": p["id"], "quote": p["text"]} for p in use]}
     p = passages[0]
     return {"text": f"For {role}: {ob.required_action or 'review this requirement'}. Source says: \"{p['text']}\"",
             "citations": [{"source": p["id"], "quote": p["text"]}]}

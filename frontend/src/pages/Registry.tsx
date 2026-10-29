@@ -440,7 +440,7 @@ export default function Registry() {
         {!restricted && <div className="card" style={{ marginTop: 14 }}>
           <div className="sec"><h2>Discovery reconciliation</h2>
             <button className="btn sm" disabled={busy} onClick={() => run(async () => { await api.post('/sweep'); refreshAll() })}>Run check now</button></div>
-          <p className="muted" style={{ marginTop: 0 }}>The register is checked against discovery every minute. An unregistered internet-facing asset raises a High finding for the CISO; registering it resolves the finding.</p>
+          <p className="muted" style={{ marginTop: 0 }}>The register is checked against discovery every minute. An unregistered internet-facing system raises a High finding for the CISO; registering it resolves the finding.</p>
           <table><thead><tr><th>Seen by discovery</th><th>Source</th><th>Exposure</th><th>In register</th><th></th></tr></thead><tbody>
             {discovered.map((d: any) => <tr key={d.name}><td>{d.name}</td><td>{d.source}</td><td>{d.internet_facing ? 'Internet-facing' : 'Internal'}</td>
               <td>{d.registered ? '✓' : <b className="err">✕ unregistered</b>}</td>

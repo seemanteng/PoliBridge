@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, fmt, fmtDay, useApi } from '../api'
-import { Badge, Loading, Modal } from '../ui'
+import { Badge, Loading, Modal, pretty } from '../ui'
 import { Controls } from '../filters'
 import { has, uniq } from '../filterUtils'
 
@@ -47,7 +47,7 @@ async function relatedRecords(key: IssueKey, oversight: any): Promise<IssueItem[
   }
   const canary = await api.get('/canary')
   return canary.runs.filter((r: any) => r.status !== 'running').map((r: any) =>
-    item(r.asset, `${r.ref} · ${r.status}`, `/alerts?tab=selftests&run=${r.id}`))
+    item(r.asset, `${r.ref} · ${pretty(r.status)}`, `/alerts?tab=selftests&run=${r.id}`))
 }
 
 function TabBar({ tab }: { tab: string }) {
@@ -130,7 +130,7 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
           `${o.high_overdue} high impact · remediation or investigation deadlines passed`)}
         {kpi('cannot_determine', 'Applicability unresolved', k.cannot_determine,
           'Further assessment is needed to determine impact', 'cdk')}
-        {kpi('expired_evidence', 'Expired evidence', k.expired_evidence,
+        {kpi('expired_evidence', 'Lapsed evidence', k.expired_evidence,
           k.lapsed_monitoring ? `Includes ${k.lapsed_monitoring} monitoring control${k.lapsed_monitoring === 1 ? '' : 's'} requiring re-verification`
             : 'Supporting evidence requires renewal')}
         {kpi('failed_deliveries', 'Failed notifications', k.failed_deliveries,
@@ -243,7 +243,7 @@ function BoardSummary({ onClose }: { onClose: () => void }) {
           <h2 style={{ marginTop: 14, fontSize: 13 }}>Items for the next board risk report</h2>
           {b.board_risk_items.map((t: any) => (
             <p key={t.task} style={{ padding: '6px 0', borderBottom: '1px solid #efede6' }}>
-              TSK-{String(t.task).padStart(4, '0')} · {t.asset} · {t.impact} · due {fmt(t.remediate_due)} · {t.status}
+              TSK-{String(t.task).padStart(4, '0')} · {t.asset} · {t.impact} · due {fmt(t.remediate_due)} · {pretty(t.status)}
             </p>
           ))}
           {!b.board_risk_items.length && <p className="muted">None.</p>}
