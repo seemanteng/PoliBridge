@@ -15,7 +15,7 @@ export function EvidenceList({ embedded = false }: { embedded?: boolean }) {
           against the proof the owner submitted, by someone other than the person who did the work.</p>
         <div className="grid g3" style={{ marginTop: 10 }}>
           <div><b>1 · Owner submits proof</b><div className="muted">Which system, which component, what was scanned, the method, and when.</div></div>
-          <div><b>2 · The system checks it</b><div className="muted">Right asset? Did the scan cover the component's folder? Strong enough method? Recent enough? Is the reviewer independent?</div></div>
+          <div><b>2 · The system checks it</b><div className="muted">Right system? Did the scan cover the component's folder? Strong enough method? Recent enough? Is the reviewer independent?</div></div>
           <div><b>3 · An independent reviewer decides</b><div className="muted">Approve and the claim becomes verified, with an expiry. Reject and the task stays open and escalates.</div></div>
         </div>
         <p className="muted" style={{ marginTop: 10 }}>This is the Equifax lesson: its scan ran but never looked inside the vulnerable component. Open the ACIS evidence below to see exactly that failure caught.</p>
@@ -56,7 +56,7 @@ export function EvidenceReview() {
           PoliBridge flags what the evidence lacks; it never infers safety from an uploaded report.</p></div>}
       {pending && <div className="note ok" style={{ marginTop: 16 }}><b>All automated checks passed</b><p>An independent reviewer must still decide.</p></div>}
       {e.status === 'accepted' && <div className="note ok" style={{ marginTop: 16 }}><b>Evidence accepted</b>
-        <p>{e.claim_id ? 'Both sign-offs are in and the claim is recorded.' : <>Next, the asset owner (IT) and Information Security must both sign off on the <Link to={`/remediations/${e.task_id}`}>task page</Link>.</>}</p></div>}
+        <p>{e.claim_id ? 'Both sign-offs are in and the claim is recorded.' : <>Next, the system owner (IT) and Information Security must both sign off on the <Link to={`/remediations/${e.task_id}`}>task page</Link>.</>}</p></div>}
 
       <div className="grid g21" style={{ gridTemplateColumns: '1.6fr 1fr' }}>
         <div className="card"><div className="sec"><h2>Claim versus evidence</h2><span className="faint">Rules E1–E3</span></div>

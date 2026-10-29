@@ -1,10 +1,45 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
-import { Badge, ImpactBadge, Loading, Modal, TaskStatusPills, useAction } from '../ui'
+import { Badge, ImpactBadge, Loading, Modal, pretty, TaskStatusPills, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
 import { SignoffCard } from './Signoffs'
 import { GuidanceText } from './documents/Guidance'
+
+function FixSteps({ t }: { t: any }) {
+  const adv = t.advisory
+  const g = t.guidance[0]
+  if (!adv || t.renewal) return g ? <div className="card" style={{ marginTop: 14 }}><h2>Guidance for this system</h2>
+    {g.status === 'released' ? <GuidanceText g={g} /> : <p className="muted" style={{ marginTop: 6 }}>Held back for Compliance: {g.reason}</p>}</div> : null
+  const paths = (t.scope_paths || []).join(', ') || 'every application folder'
+  const affected = adv.affected_versions.join(' or ')
+  const fix = adv.fixed_version
+  const rem = t.kind === 'investigation'
+  const step = (_n: number, title: string, body: any) => (
+    <li style={{ margin: '10px 0' }}><b>{title}</b><div className="muted" style={{ marginTop: 2 }}>{body}</div></li>)
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <h2>What to do</h2>
+      <p className="muted" style={{ margin: '6px 0' }}>{adv.cve} affects <b>{adv.product}</b> {affected}. {fix ? <>Fixed in <b>{fix}</b>.</> : 'No fixed version is published yet.'}
+        {adv.kev && ' It is being exploited in the wild.'}</p>
+      <ol style={{ margin: '4px 0 0', paddingLeft: 20 }}>
+        {step(1, `Find out whether ${t.asset} runs ${adv.product}`,
+          <>Look in <code>{paths}</code>. For example: <code>find {(t.scope_paths?.[0] || '/').replace('/**', '')} -iname "{adv.product}*"</code>.
+            {rem && ' Today there is no current component record for this system, which is why it is marked Cannot Determine.'}</>)}
+        {step(2, 'Compare what you find with the fixed version', <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+          <li><b>Not installed, or already {fix ? `at ${fix}` : 'fixed'}:</b> nothing to patch. Go to step 3 and submit evidence that shows it.</li>
+          <li><b>In the affected range:</b> {fix ? <>upgrade to {fix}</> : 'apply the vendor mitigation'}, redeploy, then click <b>Mark fixed</b> on this page.</li>
+          <li><b>Cannot be patched in time:</b> request a time-limited risk acceptance and record an interim control{t.interim.due_h ? ` within ${t.interim.due_h} hours` : ''}.</li></ul>)}
+        {step(3, 'Submit evidence on this page', <>Use an authenticated scan or a direct version check. It must cover <code>{paths}</code> and be dated within the validity window{t.kind === 'remediation' ? ', after you marked it fixed' : ''}.</>)}
+        {step(4, 'It is then reviewed and signed off', <>An independent reviewer ({t.people.reviewer || 'unassigned'}) approves the evidence. The system owner (IT) and Information Security then each sign off.</>)}
+      </ol>
+      <p className="faint" style={{ marginTop: 10 }}>Deadlines: acknowledge {t.ack.note} · {t.interim.due_h ? `interim control ${t.interim.note} · ` : ''}fix by {t.disposition.due}.</p>
+      {g && g.status === 'released' && <details style={{ marginTop: 8 }}><summary className="faint" style={{ cursor: 'pointer' }}>Where this guidance comes from</summary><GuidanceText g={g} /></details>}
+      {g && g.status !== 'released' && <p className="muted" style={{ marginTop: 6 }}>Written guidance held back for Compliance: {g.reason}</p>}
+      {g?.consult && <p className="faint" style={{ marginTop: 6 }}>{g.consulted_at ? `Checked by ${g.consult}` : `${g.consult} is checking it alongside`}</p>}
+    </div>
+  )
+}
 
 export function TaskList() {
   const [params, setParams] = useSearchParams()
@@ -93,7 +128,7 @@ export function TaskDetail() {
               {e.detail && <div className="muted" style={{ fontSize: 13 }}>{e.detail}</div>}</div></li>))}</ul>
           {myRisks.length > 0 && <><h2 style={{ marginTop: 14 }}>Risk acceptance</h2>{myRisks.map((r: any) => (
             <div key={r.id} className="note" style={{ border: '1px solid var(--line)', marginTop: 8 }}>
-              <b>RA-{r.id}</b> · {r.status} · expires {fmt(r.expiry)}<p className="muted">{r.scenario} — controls: {r.controls}</p>
+              <b>RA-{r.id}</b> · {pretty(r.status)} · expires {fmt(r.expiry)}<p className="muted">{r.scenario} — controls: {r.controls}</p>
               {r.status === 'pending' && <button className="btn sm primary" onClick={() => act(`/risk-acceptances/${r.id}/approve`)}>Approve as authorised risk owner</button>}</div>))}</>}
         </div>
         <div>
@@ -103,9 +138,7 @@ export function TaskDetail() {
               <dt>Manager</dt><dd>{t.people.manager || '—'}</dd><dt>Risk owner</dt><dd>{t.people.risk_owner}</dd>
               <dt>Reviewer</dt><dd>{t.people.reviewer}<div className="faint">must differ from submitter</div></dd></dl></div>
           {t.signoffs.length > 0 && <SignoffCard t={t} />}
-          {t.guidance.length > 0 && <div className="card" style={{ marginTop: 14 }}><h2>Fix guidance for this system</h2>
-            {t.guidance[0].status === 'released' ? <GuidanceText g={t.guidance[0]} /> : <p className="muted" style={{ marginTop: 6 }}>Held back for Compliance: {t.guidance[0].reason}</p>}
-            {t.guidance[0].consult && <p className="faint" style={{ marginTop: 6 }}>{t.guidance[0].consulted_at ? `Checked by ${t.guidance[0].consult}` : `${t.guidance[0].consult} is checking it alongside`}</p>}</div>}
+          <FixSteps t={t} />
           <div className="card" style={{ marginTop: 14 }}><h2>To close this task</h2>
             <p className="muted" style={{ margin: '8px 0' }}>{t.close_requirement}</p>
             {t.renewal && <div className="note" style={{ marginBottom: 10 }}>

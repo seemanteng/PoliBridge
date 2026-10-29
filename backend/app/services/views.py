@@ -240,6 +240,7 @@ def task_detail(db, t: M.Task) -> dict:
     cd = countdowns(t)
     now = clock.now()
     rem = t.remediate_due - now
+    adv = db.get(M.Advisory, ob.advisory_id) if ob.advisory_id else None
     title = (f"Renew {t.component} monitoring on {a.name}" if renewal else
              f"Establish whether {a.name} runs an affected {t.component} version" if t.kind == "investigation"
              else f"Remediate {t.component} on {a.name}")
@@ -270,8 +271,11 @@ def task_detail(db, t: M.Task) -> dict:
                               f"with scope {', '.join(renewal.evidence_scope or [])} and a timestamp after the renewal. "
                               "An independent reviewer must approve it; approved, time-limited risk acceptance is another disposition."
                               if renewal else f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
-                              f"{a.name}, accepted by an independent reviewer and signed off by both the asset owner (IT) "
+                              f"{a.name}, accepted by an independent reviewer and signed off by both the system owner (IT) "
                               "and Information Security — or approved, time-limited risk acceptance."),
+        "advisory": ({"cve": adv.cve, "product": adv.product, "affected_versions": adv.affected_versions,
+                      "fixed_version": adv.fixed_version, "cvss": adv.cvss, "kev": adv.kev} if adv else None),
+        "scope_paths": [r.rstrip("/") + "/**" for r in a.app_roots or []],
         "dispute": t.signoff_dispute or None,
         "record_sources": [{"key": k, "label": v} for k, v in closure.RECORD_SOURCES.items()],
         "current_evidence": (lambda e: {"id": e.id, "status": e.status, "purpose": e.purpose,

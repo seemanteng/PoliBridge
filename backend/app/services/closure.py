@@ -3,7 +3,7 @@
 A remediation or "Does Not Apply" claim closes only when:
 1. structured evidence passes the automated checks (E1, E2, E4),
 2. an independent reviewer accepts it (E3), and
-3. two functions sign it off (report §6.5): the asset owner (IT) confirms the component record, and
+3. two functions sign it off (report §6.5): the system owner (IT) confirms the component record, and
    Information Security confirms the verification covered that component. The impact rules (C2-C4) can add
    Compliance or Legal on top.
 If the two sign-offs disagree, or either side has no evidence, the claim is Cannot Determine: the evidence is
@@ -160,7 +160,7 @@ def _complete_remediation(db, task: Task, ev: Evidence, reviewer: Person):
 # ---------- sign-offs: the two-function sign-off (§6.5) plus whatever C2-C4 add ----------
 DUAL = ("system_owner", "security")  # IT confirms the component record; Information Security confirms coverage
 SIGNOFF_ROLE = {"security": "ciso", "compliance": "compliance", "legal": "legal"}
-SIGNOFF_LABEL = {"system_owner": "Asset owner (IT)", "security": "Information Security",
+SIGNOFF_LABEL = {"system_owner": "System owner (IT)", "security": "Information Security",
                  "compliance": "Compliance (C3/C4)", "legal": "Legal (C4)"}
 SIGNOFF_CONFIRMS = {"system_owner": "The system's component record matches what the evidence says",
                     "security": "The verification examined the affected component",
@@ -219,9 +219,9 @@ def _check_signer(db, task: Task, key: str, person: Person):
 
 def sign_required_review(db, task: Task, key: str, person: Person, *, record_version: str | None = None,
                          record_source: str | None = None, note: str = ""):
-    """One function signs off the claim. The asset owner states what their own component record shows; if that
+    """One function signs off the claim. The system owner states what their own component record shows; if that
     contradicts the evidence, or there is no record, the sign-offs disagree and the claim goes to Cannot Determine.
-    Everyone but the asset owner must be independent of the fix, like the evidence reviewer (E3)."""
+    Everyone but the system owner must be independent of the fix, like the evidence reviewer (E3)."""
     _check_signer(db, task, key, person)
     if key in _valid_signoffs(task):
         raise ValueError(f"{SIGNOFF_LABEL[key]} has already signed off")
@@ -254,24 +254,24 @@ def sign_required_review(db, task: Task, key: str, person: Person, *, record_ver
 
 
 def _record_conflict(task: Task, ev: Evidence, record_version: str | None, record_source: str | None) -> str | None:
-    """Compare the asset owner's component record with the evidence. Returns why they disagree, if they do."""
+    """Compare the system owner's component record with the evidence. Returns why they disagree, if they do."""
     if not record_source:
         raise ValueError("say where your component record comes from")
     if record_source not in RECORD_SOURCES:
         raise ValueError(f"record source must be one of {', '.join(RECORD_SOURCES)}")
     comp = task.component or "the component"
     if record_source == "none":
-        return (f"the asset owner has no component record for {comp}; an empty record next to a clean scan is "
+        return (f"the system owner has no component record for {comp}; an empty record next to a clean scan is "
                 "uncertainty, not agreement")
     if ev.purpose == "absence":
         if record_version:
-            return (f"the asset owner's record shows {comp} {record_version} installed, but the evidence claims "
+            return (f"the system owner's record shows {comp} {record_version} installed, but the evidence claims "
                     f"{comp} is not present")
         return None
     if not record_version:
         raise ValueError(f"state the {comp} version your component record shows")
     if ev.observed_version and versions.norm(record_version) != versions.norm(ev.observed_version):
-        return (f"the asset owner's record shows {comp} {record_version}, but the verified evidence observed "
+        return (f"the system owner's record shows {comp} {record_version}, but the verified evidence observed "
                 f"{ev.observed_version}")
     return None
 
@@ -384,10 +384,11 @@ def try_close_obligation(db, ob: Obligation) -> tuple[bool, list[str]]:
     blockers = []
     for t in db.scalars(select(Task).where(Task.obligation_id == ob.id, Task.is_test == False)):  # noqa: E712
         if t.status not in TERMINAL:
-            blockers.append(f"task {t.id} ({t.kind}) is {t.status}")
+            name = db.get(Asset, t.asset_id).name
+            blockers.append(f"{name}: TSK-{t.id:04d} ({t.kind}) is still {t.status.replace('_', ' ')}")
     for c in db.scalars(select(Claim).where(Claim.obligation_id == ob.id, Claim.claim_type == "applicability",
                                             Claim.status == "active", Claim.value == "cannot_determine")):
-        blockers.append(f"asset {c.asset_id} remains Cannot Determine")
+        blockers.append(f"{db.get(Asset, c.asset_id).name}: still Cannot Determine, so it is not yet known whether it is affected")
     if ob.kind == "regulatory" and not ob.approved_by_id:
         blockers.append("regulatory obligation not approved by Compliance/Legal")
     if blockers:

@@ -23,7 +23,7 @@ export function SignoffCard({ t }: { t: any }) {
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <h2>Remediation sign-offs</h2>
-      <p className="muted" style={{ margin: '6px 0' }}>Two functions must agree before this closes: the <b>asset owner (IT)</b> confirms the
+      <p className="muted" style={{ margin: '6px 0' }}>Two functions must agree before this closes: the <b>system owner (IT)</b> confirms the
         system's component record, and <b>Information Security</b> confirms the check covered the component.
         {extra.length > 0 && <> This system's impact also needs {extra.map((s) => s.label).join(' and ')}.</>}</p>
 
@@ -57,7 +57,7 @@ export function SignoffCard({ t }: { t: any }) {
   )
 }
 
-// The asset owner states what their own record shows. If it contradicts the evidence, PoliBridge records a disagreement.
+// The system owner states what their own record shows. If it contradicts the evidence, PoliBridge records a disagreement.
 function RecordModal({ t, s, onClose }: { t: any; s: Signoff; onClose: () => void }) {
   const absence = t.current_evidence?.purpose === 'absence'
   const [present, setPresent] = useState(!absence)

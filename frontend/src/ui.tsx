@@ -12,10 +12,13 @@ export const ImpactBadge = ({ impact, short = false }: { impact: string; short?:
   <Badge kind={IMPACT[impact] || ''}>{impact}{short ? '' : ' impact'}</Badge>
 )
 
+// 'fixed_pending_review' -> 'Fixed pending review'; 'expired' reads as 'Lapsed' everywhere a claim is shown
+export const pretty = (s: string) => { const t = s === 'expired' ? 'lapsed' : s.replaceAll('_', ' '); return t.charAt(0).toUpperCase() + t.slice(1) }
+
 export const TaskStatusBadge = ({ status }: { status: string }) => (
   <Badge kind={status === 'closed' ? 'ok' : status === 'risk_accepted' ? 'info' :
     status === 'reopened' ? 'over' : status === 'fixed_pending_review' ? 'cd' : ''}>
-    {status.replaceAll('_', ' ')}
+    {pretty(status)}
   </Badge>
 )
 
