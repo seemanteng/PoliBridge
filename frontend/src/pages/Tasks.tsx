@@ -76,7 +76,7 @@ function Updates() {
               <tr key={t.id} className={t.overdue ? 'bad' : ''}>
                 <td><Link to={`/remediations/${t.id}`}><b>{t.kind === 'investigation' ? 'Investigate' : 'Remediate'} {t.component} on {t.asset}</b></Link>
                   <div className="faint mono">TSK-{String(t.id).padStart(4, '0')}</div></td>
-                <td><ImpactBadge impact={t.impact} short /></td>
+                <td><ImpactBadge impact={t.impact} emergency={t.emergency} short /></td>
                 <td>{t.owner}</td><td className="task-status-cell"><TaskStatusPills status={t.status} overdue={t.overdue} /></td>
                 <td style={{ maxWidth: 240 }}>{t.latest_update ? <><b style={{ fontWeight: 500 }}>{t.latest_update.title}</b><div className="faint">{fmt(t.latest_update.ts, true)}</div></> : <span className="muted">—</span>}</td>
                 <td className="mono">{t.acknowledged_at ? 'acknowledged' : `${t.countdown.ack_remaining_h}h`}</td>
@@ -103,7 +103,7 @@ export function TaskDetail() {
   return (
     <>
       <div className="crumbs"><Link to={`/acknowledgements/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
-      <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} />
+      <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} emergency={t.emergency} />
         {t.kind === 'investigation' && <Badge kind="lbl-cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
         <TaskStatusPills status={t.status} overdue={t.overdue} /></div>
       <h1>{t.title}</h1>
@@ -117,7 +117,7 @@ export function TaskDetail() {
           <div className={`stat ${t.interim.state === 'reopened' ? 'purple' : t.interim.state === 'pending' ? 'red' : ''}`}>
             {{ reopened: 'Reopened', recorded: 'In place', pending: 'Required', not_required: 'Not required' }[t.interim.state as string]}</div>
           <div className="faint mono">{t.interim.note}</div></div>
-        <div className={`card ${t.disposition.overdue ? 'alert' : ''}`}><div className="faint">Disposition · {t.disposition.days} days</div>
+        <div className={`card ${t.disposition.overdue ? 'alert' : ''}`}><div className="faint">Disposition · {t.disposition.days >= 3 ? `${t.disposition.days} days` : `${t.disposition.days * 24}h`}</div>
           <div className={`stat ${t.disposition.overdue ? 'red' : ''}`}>{t.disposition.remaining}</div>
           <div className="faint mono">due {t.disposition.due} · not reset</div></div>
       </div>

@@ -101,7 +101,8 @@ def alerts(db=Depends(get_db)):
     for t in db.scalars(select(M.Task).where(M.Task.is_test == False, M.Task.status.in_(OPEN_STATES))):  # noqa: E712
         a = db.get(M.Asset, t.asset_id)
         owner = db.get(M.Person, t.owner_id) if t.owner_id else None
-        base = {"task_id": t.id, "ref": views.task_label(t), "impact": t.impact, "asset": a.name,
+        base = {"task_id": t.id, "ref": views.task_label(t), "impact": t.impact, "emergency": bool(t.emergency),
+                "asset": a.name,
                 "owner": owner.name if owner else None, "title": f"{'Investigate' if t.kind == 'investigation' else 'Remediate'} {t.component or ''} on {a.name}".replace("  ", " "),
                 **_ladder(db, t)}
         if t.acknowledged_at is None and now > t.ack_due:
@@ -116,12 +117,16 @@ def alerts(db=Depends(get_db)):
                           "escalated_to": ", ".join(d.get("escalated_to") or []) or base["escalated_to"],
                           "next": None if top else "risk owner and senior management"})
         if is_overdue(t, now):
-            items.append({**base, "type": "overdue", "what": "Remediation past its deadline",
+            found_late = bool((t.deadline_basis or {}).get("overdue_at_discovery"))
+            items.append({**base, "type": "found_late" if found_late else "overdue",
+                          "what": ("Already past its fix deadline when found" if found_late
+                                   else "Remediation past its deadline"),
                           "late_by_h": round((now - t.remediate_due).total_seconds() / 3600, 1), "due": _iso(t.remediate_due)})
-        elif (t.impact == "High" and t.status in ("open", "reopened") and t.interim_due and now > t.interim_due and not t.interim_control):
+        elif (t.status in ("open", "reopened") and t.interim_due and now > t.interim_due and not t.interim_control
+              and not assignment._has_accepted_risk(db, t)):
             items.append({**base, "type": "interim", "what": "No interim control or risk acceptance",
                           "late_by_h": round((now - t.interim_due).total_seconds() / 3600, 1), "due": _iso(t.interim_due)})
-    items.sort(key=lambda i: (i["impact"] != "High", -i["late_by_h"]))
+    items.sort(key=lambda i: (not i["emergency"], i["impact"] != "High", -i["late_by_h"]))
     findings = [{"id": f.id, "kind": f.kind, "severity": f.severity, "subject": f.subject, "detail": f.detail,
                  "assigned_to": db.get(M.Person, f.assigned_to_id).name if f.assigned_to_id else None,
                  "created_at": _iso(f.created_at)}
@@ -131,7 +136,7 @@ def alerts(db=Depends(get_db)):
             "message": n.message, "delivered": n.delivered, "task_id": n.task_id}
            for n in db.scalars(select(M.Notification).where(M.Notification.kind.in_(
                ["escalate_manager", "escalate_ciso", "deadline_missed", "interim_missing", "reminder",
-                "signoff_disputed", "dispute_unresolved"]))
+                "signoff_disputed", "dispute_unresolved", "progress_check", "exploit_known", "deadline_overridden"]))
                .order_by(M.Notification.id.desc()).limit(40))]
     return {"now": _iso(now), "items": items, "findings": findings, "log": log}
 

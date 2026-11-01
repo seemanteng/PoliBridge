@@ -26,7 +26,7 @@ def init_db(eng=None):
     Base.metadata.create_all(eng)
     # create_all never alters existing tables: add columns introduced after a database was first seeded
     added = {"advisory": {"description": "TEXT", "received_at": "DATETIME", "ingested_at": "DATETIME",
-                          "sources": "JSON", "conflict": "TEXT"},
+                          "sources": "JSON", "conflict": "TEXT", "exploited_at": "DATETIME"},
              "obligation": {"previous_quotation": "TEXT", "departments": "JSON", "supersedes_id": "INTEGER",
                             "superseded_reason": "TEXT", "source_version_id": "INTEGER"},
              "person": {"email": "TEXT"},
@@ -40,8 +40,8 @@ def init_db(eng=None):
              "source_version": {"sha256": "TEXT", "file_name": "TEXT", "retrieved_from": "TEXT",
                                 "effective_date": "TEXT", "uploaded_by": "TEXT", "summary": "JSON"},
              "claim": {"source_id": "INTEGER"},
-             "task": {"reviewer_signoffs": "JSON DEFAULT '{}'", "signoff_dispute": "JSON"},
-             "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
+             "task": {"reviewer_signoffs": "JSON DEFAULT '{}'", "signoff_dispute": "JSON",
+                      "emergency": "BOOLEAN DEFAULT 0", "deadline_basis": "JSON"},             "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
                           "topic": "TEXT", "approver_id": "INTEGER", "approved_at": "DATETIME", "consult_id": "INTEGER",
                           "consulted_at": "DATETIME", "human_authored": "BOOLEAN DEFAULT 0"},
              "canary_run": {"feed": "TEXT", "stage": "TEXT"}}

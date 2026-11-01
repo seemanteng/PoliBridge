@@ -311,7 +311,7 @@ def dispute_signoff(db, task: Task, key: str, person: Person, reason: str, *, au
     now = clock.now()
     asset = db.get(Asset, task.asset_id)
     label = f"TSK-{task.id:04d}"
-    ev.status, ev.reasons = "rejected", [f"Sign-offs disagree ({SIGNOFF_LABEL[key]}): {reason}"]
+    ev.status, ev.reasons = "rejected", [f"E7: Sign-offs disagree ({SIGNOFF_LABEL[key]}): {reason}"]
     if task.status not in TERMINAL:
         task.status = "open"
     task.reviewer_signoffs = {}
@@ -325,7 +325,7 @@ def dispute_signoff(db, task: Task, key: str, person: Person, reason: str, *, au
                        ("security", "re-verify that the evidence covered the component")):
         who = required_signer(db, task, side)
         f = raise_finding(db, "signoff_disagreement", sev, f"{asset.name} ({label}): {what}",
-                          f"Remediation sign-offs disagree. {SIGNOFF_LABEL[key]}: {reason}", assigned_to=who,
+                          f"E7: remediation sign-offs disagree. {SIGNOFF_LABEL[key]}: {reason}", assigned_to=who,
                           is_test=task.is_test)
         findings.append(f.id)
         notify(db, task=task, person=who, kind="signoff_disagreement",
@@ -354,7 +354,7 @@ def _resolve_dispute(db, task: Task, how: str):
 
 
 def check_disputes(db) -> list[int]:
-    """Sweep: a disagreement nobody has resolved in time goes up to the risk owner and senior management, and into
+    """E8 sweep: a disagreement nobody has resolved in time goes up to the risk owner and senior management, and into
     the board report. Escalated once. A task closed another way (e.g. risk acceptance) ends its dispute."""
     escalated, now = [], clock.now()
     limit = timedelta(hours=TIMINGS["signoff_dispute_escalate_hours"])
@@ -372,7 +372,7 @@ def check_disputes(db) -> list[int]:
         if not _sent(db, t, "deadline_missed"):  # someone may already have escalated it by hand (Alerts page)
             for p in targets:
                 notify(db, task=t, person=p, kind="dispute_unresolved",
-                       message=f"Remediation sign-offs on {asset.name} (task {t.id}) still disagree after "
+                       message=f"E8: remediation sign-offs on {asset.name} (task {t.id}) still disagree after "
                                f"{TIMINGS['signoff_dispute_escalate_hours']}h: {d['reason']}")
         t.board_flag = True
         t.signoff_dispute = {**d, "escalated_at": now.isoformat(),

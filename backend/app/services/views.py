@@ -7,7 +7,7 @@ from ..clock import clock
 from ..config import TIMINGS
 from .. import models as M
 from . import assurance, closure
-from .assignment import OPEN_STATES, countdowns, is_overdue
+from .assignment import OPEN_STATES, countdowns, is_overdue, policy, profile
 from .assessment import _classify
 from .common import bu_head, first_with_role
 
@@ -50,7 +50,8 @@ def oversight(db) -> dict:
         o = db.get(M.Person, t.owner_id) if t.owner_id else None
         rows.append({"id": t.id, "ref": task_label(t), "title": (db.get(M.Obligation, t.obligation_id).title if db.get(M.Obligation, t.obligation_id).kind == "policy"
                                else f"{'Investigate' if t.kind == 'investigation' else 'Remediate'} "
-                                    f"{t.component or ''} on {a.name}"), "impact": t.impact, "owner": o.name if o else None,
+                                    f"{t.component or ''} on {a.name}"), "impact": t.impact, "emergency": bool(t.emergency),
+                     "owner": o.name if o else None,
                      "owner_note": ("rerouted · BU head" if t.owner_id != t.original_owner_id and o and o.role == "bu_head"
                                     else None), "late_by": hm(now - t.remediate_due),
                      "escalated_to": escalated_to(db, t)})
@@ -164,7 +165,22 @@ def task_timeline(db, t: M.Task) -> list[dict]:
         title = detail = None
         tone = "normal"
         if a == "created":
-            title, detail = "Task created", f"{t.impact} {t.kind} task · acknowledgement due {t.ack_due:%d %b %H:%M}"
+            title = "Task created"
+            detail = f"{'Emergency' if d.get('emergency') else t.impact} {t.kind} task · acknowledgement due {t.ack_due:%d %b %H:%M}"
+            if d.get("trigger") and d.get("trigger") != "discovered":
+                detail += f" · fix deadline counts from {d['trigger_at'][:16].replace('T', ' ')}, when {TRIGGER_LABEL[d['trigger']]}"
+        elif a == "overdue_at_discovery":
+            title, tone = "Found already past its fix deadline", "bad"
+            detail = "Escalated at once; a workaround or risk acceptance is due within " \
+                     f"{TIMINGS['late_discovery_interim_hours']} hours."
+        elif a == "deadline_overridden":
+            title = "Fix deadline shortened"
+            detail = f"{d.get('reason')} · now due {d.get('due', '')[:16]}, was {d.get('previous', '')[:16]}"
+        elif a == "exploit_known":
+            title, tone = "Working exploit known — now Emergency", "bad"
+            detail = f"Fix due {d.get('remediate_due', '')[:16]}"
+        elif a == "progress_check_requested":
+            title, detail = "Progress check requested", f"After {d.get('after_hours')}h: fixed, workaround in place, or blocked?"
         elif a == "fallback_routed":
             head = bu_head(db, db.get(M.Asset, t.asset_id))
             title = f"Rerouted to {head.name if head else 'fallback'}, business-unit head"
@@ -184,7 +200,7 @@ def task_timeline(db, t: M.Task) -> list[dict]:
             title, tone, detail = "Interim control reopened", "lapse", d.get("because")
         elif a == "escalated":
             to, why = d.get("to"), d.get("reason")
-            if why == "remediation deadline missed":
+            if why in ("remediation deadline missed", "fix deadline had already passed when the issue was found"):
                 title, tone = "Deadline missed — escalated", "bad"
                 detail = "To the accountable risk owner and senior management. Added to the next board risk report."
             elif why == "remediation sign-off disagreement unresolved":
@@ -236,10 +252,19 @@ def _span(h: float) -> str:
     return f"{int(h // 24)} days" if h > 48 and h % 24 == 0 else f"{h:g}h"
 
 
+TRIGGER_LABEL = {"vendor_release": "the vendor released the fix",
+                 "exploit_known": "a working exploit became known",
+                 "discovered": "PoliBridge found the issue (no vendor release date is known)"}
+
+
 def response_rules(db, t: M.Task) -> dict:
-    """Which response windows apply to this task, why, when they started and where each one stands (rules D1-D3)."""
-    cfg, why, now = TIMINGS[t.impact], (TIMINGS.get("rationale") or {}), clock.now()
-    reasons = why.get(t.impact) or {}
+    """Which response windows apply to this task, why, what each clock counts from and where each one stands
+    (rules D1-D3)."""
+    prof = profile(t)
+    cfg, why, now = TIMINGS[prof], (TIMINGS.get("rationale") or {}), clock.now()
+    reasons = why.get(prof) or {}
+    basis = t.deadline_basis or {"trigger": "discovered", "trigger_at": t.created_at.isoformat()}
+    override = basis.get("override")
     done = t.status in closure.TERMINAL
     rows = []
     # acknowledgement
@@ -255,18 +280,34 @@ def response_rules(db, t: M.Task) -> dict:
         status = f"{'Missed' if state == 'missed' else 'Running'} · due {t.ack_due:%d %b %H:%M}"
     rows.append({"key": "acknowledge", "step": "Acknowledge", "window": ack_rule, "due": t.ack_due.isoformat(),
                  "state": state, "status": status, "if_missed": f"Escalates to {ladder}" if ladder else None,
-                 "why": reasons.get("acknowledge")})
-    # interim control (High only)
+                 "why": reasons.get("acknowledge"), "counts_from": "assigned"})
+    # progress check: a status request, not a deadline
+    if cfg.get("progress_checkpoint_hours"):
+        at = t.created_at + timedelta(hours=cfg["progress_checkpoint_hours"])
+        sent = db.scalar(select(M.Notification.created_at).where(M.Notification.task_id == t.id,
+                                                                 M.Notification.kind == "progress_check"))
+        fixed_first = (t.fixed_at and t.fixed_at <= at) or (done and t.closed_at and t.closed_at <= at)
+        state, status = (("met", "Not needed · fixed before the check") if fixed_first else
+                         ("sent", f"Requested · {at:%d %b %H:%M}") if sent or now >= at else
+                         ("running", f"Scheduled · {at:%d %b %H:%M}"))
+        rows.append({"key": "progress", "step": "Progress check", "window": _span(cfg["progress_checkpoint_hours"]),
+                     "due": at.isoformat(), "state": state, "status": status,
+                     "if_missed": None, "why": reasons.get("progress"), "counts_from": "assigned"})
+    # interim control
     if t.interim_due:
         ok = bool(t.interim_control) or db.scalar(select(M.RiskAcceptance.id).where(
             M.RiskAcceptance.task_id == t.id, M.RiskAcceptance.status == "approved")) is not None
         state = "met" if ok or done else "missed" if now > t.interim_due else "running"
-        rows.append({"key": "interim", "step": "Reduce exposure (interim control)", "window": _span(cfg["interim_hours"]),
+        late = basis.get("interim_reset")
+        rows.append({"key": "interim", "step": "Reduce exposure (workaround or risk acceptance)",
+                     "window": (f"{TIMINGS['late_discovery_interim_hours']}h (found late)" if late
+                                else _span(cfg["interim_hours"])),
                      "due": t.interim_due.isoformat(), "state": state,
                      "status": {"met": "Met · control or risk acceptance recorded" if ok else "Not needed · task closed",
                                 "missed": "Missed", "running": f"Running · due {t.interim_due:%d %b %H:%M}"}[state],
                      "if_missed": "The CISO is told and an interim-control finding is raised",
-                     "why": reasons.get("interim")})
+                     "why": why.get("late") if late else reasons.get("interim"),
+                     "counts_from": "assigned" if late else "trigger"})
     # remediation
     if done:
         on_time = bool(t.closed_at and t.closed_at <= t.remediate_due)
@@ -276,14 +317,26 @@ def response_rules(db, t: M.Task) -> dict:
     else:
         state = "missed" if is_overdue(t, now) else "running"
         status = f"{'Missed' if state == 'missed' else 'Running'} · due {t.remediate_due:%d %b %H:%M}"
-    rows.append({"key": "remediate", "step": "Apply and verify the vendor fix", "window": _span(cfg["remediate_hours"]),
+    rem_why = reasons.get("remediate")
+    if override:
+        rem_why = f"Shortened by {override['by']}: {override['reason']} (was due {override['previous'][:16].replace('T', ' ')})."
+    elif basis.get("overdue_at_discovery"):
+        rem_why = f"Already past when PoliBridge found the issue, so it was escalated at once. {rem_why or ''}".strip()
+    rows.append({"key": "remediate", "step": "Apply and verify the vendor fix",
+                 "window": "Task-specific deadline" if override else _span(cfg["remediate_hours"]),
                  "due": t.remediate_due.isoformat(), "state": state, "status": status,
                  "if_missed": "Escalates to the risk owner and senior management, and into the board risk report",
-                 "why": reasons.get("remediate")})
+                 "why": rem_why, "counts_from": "trigger"})
     ob = db.get(M.Obligation, t.obligation_id)
     adv = db.get(M.Advisory, ob.advisory_id) if ob and ob.advisory_id else None
-    return {"impact": t.impact, "started": t.created_at.isoformat(),
+    return {"impact": t.impact, "profile": prof, "emergency": bool(t.emergency),
+            "assigned": t.created_at.isoformat(),
+            "trigger": basis.get("trigger"), "trigger_label": TRIGGER_LABEL.get(basis.get("trigger"), basis.get("trigger")),
+            "trigger_at": basis.get("trigger_at"),
             "vendor_published": adv.published_at.isoformat() if adv and adv.published_at else None,
+            "exploited_at": adv.exploited_at.isoformat() if adv and adv.exploited_at else None,
+            "overdue_at_discovery": bool(basis.get("overdue_at_discovery")), "override": override,
+            "can_override": t.status in ("open", "reopened", "fixed_pending_review"),
             "start_note": why.get("start"), "rows": rows}
 
 
@@ -304,7 +357,8 @@ def task_detail(db, t: M.Task) -> dict:
              else f"Remediate {t.component} on {a.name}")
     return {
         "id": t.id, "ref": task_label(t), "obligation_id": ob.id, "obligation": ob.title, "asset": a.name,
-        "kind": t.kind, "impact": t.impact, "status": t.status, "title": title, "component": t.component,
+        "kind": t.kind, "impact": t.impact, "emergency": bool(t.emergency), "status": t.status, "title": title,
+        "component": t.component,
         "overdue": is_overdue(t, now),
         "summary": (f"The evidence for “{renewal.statement}” expired. Renew the certificate or configuration, "
                     f"then verify {t.component} on {a.name} and submit new evidence for independent review." if renewal else
@@ -312,16 +366,18 @@ def task_detail(db, t: M.Task) -> dict:
                     "Supply component-scoped evidence, or remediate, or request time-limited risk acceptance."
                     if t.kind == "investigation" else
                     f"Patch {t.component} on {a.name}, then submit evidence for independent review."),
-        "ack": {"due_h": TIMINGS[t.impact].get("ack_hours"), "acknowledged": bool(t.acknowledged_at),
+        "ack": {"due_h": policy(t).get("ack_hours"), "acknowledged": bool(t.acknowledged_at),
                 "at": t.acknowledged_at.isoformat() if t.acknowledged_at else None,
                 "note": f"after {hm(t.acknowledged_at - t.created_at)}" if t.acknowledged_at else
                         f"due {t.ack_due:%d %b %H:%M}", "remaining_h": cd["ack_remaining_h"]},
-        "interim": {"state": cd["interim_state"], "due_h": TIMINGS[t.impact].get("interim_hours"),
+        "interim": {"state": cd["interim_state"],
+                    "due_h": (TIMINGS["late_discovery_interim_hours"] if (t.deadline_basis or {}).get("interim_reset")
+                              else policy(t).get("interim_hours")),
                     "note": (t.interim_control if cd["interim_state"] == "recorded" else
                              "relied on a monitoring claim that has lapsed" if cd["interim_state"] == "reopened" else
                              f"due {t.interim_due:%d %b %H:%M}" if t.interim_due else "Not required")},
         "disposition": {"remaining": ("−" if rem.total_seconds() < 0 else "") + hm(rem), "due": f"{t.remediate_due:%d %b %H:%M}",
-                        "days": TIMINGS[t.impact]["remediate_hours"] // 24, "overdue": is_overdue(t, now)},
+                        "days": policy(t)["remediate_hours"] // 24, "overdue": is_overdue(t, now)},
         "people": {"owner": {"name": owner.name, "title": owner.title or owner.role} if owner else None,
                    "manager": mgr.name if mgr else None, "risk_owner": risk.name if risk else None,
                    "reviewer": reviewer.name if reviewer else None},
@@ -427,9 +483,11 @@ def claim_severity(db, c: M.Claim) -> dict:
     a = db.get(M.Asset, c.asset_id) if c.asset_id else None
     adv = db.get(M.Advisory, ob.advisory_id) if ob and ob.advisory_id else None
     if adv is not None and a is not None:  # the advisory's impact on this system, as its task would be classified
-        level = _classify(adv, a, regulatory=ob.kind == "regulatory")["impact"]
-        return {"level": level, "cvss": adv.cvss,
-                "basis": f"{level} impact on {a.name}" + (f" · CVSS {adv.cvss:g}" if adv.cvss is not None else "")
+        info = _classify(adv, a, regulatory=ob.kind == "regulatory")
+        level, emergency = info["impact"], info["impact"] == "High" and info["emergency"]
+        return {"level": level, "cvss": adv.cvss, "emergency": emergency,
+                "basis": ("Emergency · " if emergency else "") + f"{level} impact on {a.name}"
+                         + (f" · CVSS {adv.cvss:g}" if adv.cvss is not None else "")
                          + (" · known exploited" if adv.kev else "")}
     if ob and ob.impact:
         return {"level": ob.impact, "cvss": None, "basis": f"{ob.impact} impact obligation"}

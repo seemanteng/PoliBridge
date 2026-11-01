@@ -183,6 +183,8 @@ class Advisory(Base):
     kev: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime, default=_now)  # by the issuer, not by us
+    # when a working exploit became known (e.g. CISA KEV date added); restarts an Emergency clock if later than release
+    exploited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # first source reached PoliBridge
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # matched against the estate
     # every approved source that reported this CVE: [{source, received_at, published_at, affected_versions}]
@@ -258,6 +260,11 @@ class Task(Base):
     asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"))
     kind: Mapped[str] = mapped_column(String)  # remediation|investigation
     impact: Mapped[str] = mapped_column(String)
+    # High impact with a critical or exploited flaw on an internet-facing system (C1): the Emergency timings apply
+    emergency: Mapped[bool] = mapped_column(Boolean, default=False)
+    # what the fix deadline counts from, kept apart from when PoliBridge created or assigned the task:
+    # {trigger: vendor_release|exploit_known|discovered, trigger_at, overdue_at_discovery, interim_reset, override}
+    deadline_basis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     component: Mapped[str | None] = mapped_column(String, nullable=True)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     original_owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)

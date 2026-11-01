@@ -1,10 +1,27 @@
-# Escalation and deadline policy (Build Plan, "Timings"). Hours unless stated.
+# Escalation and deadline policy (report Appendix C, rules D1-D3). Hours unless stated.
 # Changing this file changes system behaviour; rules read it, nothing hard-codes it.
+#
+# Two clocks per task:
+#  - acknowledgement, escalation and the progress check count from when the task was created and assigned;
+#  - the interim control and the fix count from the trigger: the vendor's release, or a later known exploit
+#    (falls back to discovery when no vendor date is known).
+# Neither clock is reset by rerouting, rejection, transfer or acknowledgement.
+#
+# Emergency: a High impact task whose flaw is critical or known exploited on an internet-facing system (rule C1).
+Emergency:
+  ack_hours: 4
+  ack_escalations:            # escalate if not acknowledged (D1, D2)
+    - {after_hours: 4, to: manager}
+    - {after_hours: 8, to: ciso}
+  progress_checkpoint_hours: 24  # owner reports progress: fixed, workaround in place, or blocked
+  interim_hours: null         # the fix itself is due in 48 hours
+  remediate_hours: 48         # D3
 High:
-  ack_hours: 24
-  ack_escalations:            # escalate if not acknowledged
-    - {after_hours: 24, to: manager}
-    - {after_hours: 48, to: ciso}
+  ack_hours: 4
+  ack_escalations:
+    - {after_hours: 4, to: manager}
+    - {after_hours: 8, to: ciso}
+  progress_checkpoint_hours: 24
   interim_hours: 48           # compensating control or documented risk acceptance if unpatched
   remediate_hours: 168        # 7 days
 Medium:
@@ -24,19 +41,38 @@ Low:
 # above should come with a change to its reason here. External benchmarks: check them against the report's sources.
 rationale:
   start: >-
-    Every countdown starts when PoliBridge matched the advisory to this system and created the task, not when the
-    vendor published it, and none of them is reset when the task is rerouted, transferred or disputed.
+    The fix deadline counts from when the vendor released the fix (or from when a working exploit became known, if
+    later), not from when PoliBridge found the issue, so finding it late does not buy extra time. Acknowledgement
+    counts from when the task was assigned, since nobody can acknowledge a task before it exists. No clock is reset
+    when the task is rerouted, rejected, transferred or acknowledged.
+  late: >-
+    This deadline had already passed when PoliBridge found the issue. It is escalated at once, and a workaround or an
+    approved risk acceptance is due within 4 hours. The record shows it was found late, so the owner is not blamed
+    for the lost time.
+  Emergency:
+    acknowledge: >-
+      Four hours for a named person to accept ownership, then the manager is told, then the CISO at eight hours
+      (rules D1, D2). At Equifax the alert reached nobody; an acknowledgement proves it reached someone accountable.
+    progress: >-
+      At 24 hours the owner reports whether the fix is in, a workaround is in place, or the work is blocked, so a
+      stalled fix is visible with a day still left.
+    remediate: >-
+      48 hours from the vendor's release: the Australian Signals Directorate's Essential Eight window for critical or
+      actively exploited flaws in internet-facing services, and the 48 hours of Equifax's own 2017 patching policy,
+      which was never enforced.
   High:
     acknowledge: >-
-      One working day for a named person to accept ownership, leaving time to reduce exposure inside the 48-hour
-      interim window. At Equifax the alert reached nobody; an acknowledgement proves it reached someone accountable.
+      Four hours to accept ownership, then the manager, then the CISO at eight hours (rules D1, D2). At Equifax the
+      alert reached nobody; an acknowledgement proves it reached someone accountable.
+    progress: >-
+      At 24 hours the owner reports progress, so a stalled task is visible long before its deadline.
     interim: >-
-      If the vendor fix cannot be applied quickly, exposure must be reduced within 48 hours (a vendor workaround or
-      other compensating control) or the risk formally accepted. This keeps the 48-hour window of Equifax's own 2017
-      patching policy, which was never enforced.
+      If the vendor fix cannot be applied quickly, exposure must be reduced within 48 hours of the vendor's release
+      (a vendor workaround or other compensating control) or the risk formally accepted.
     remediate: >-
-      Seven days to apply and verify the vendor fix: inside the two weeks CISA BOD 22-01 allows for known-exploited
-      vulnerabilities, and tighter because the system is critical, exposed or holds sensitive data.
+      Seven days from the vendor's release to apply and verify the fix: tighter than the two weeks the Essential Eight
+      and CISA BOD 22-01 allow for other internet-facing or known-exploited flaws, because the system is critical,
+      exposed or holds sensitive data. A provisional organisational default; a task-specific deadline takes precedence.
   Medium:
     acknowledge: Two days to accept ownership; no interim control is required at this impact.
     remediate: Thirty days, in line with common practice for high-severity findings (e.g. CISA BOD 19-02).
@@ -51,6 +87,7 @@ attestation_due_soon_days: 14       # owners are reminded to re-attest inside th
 component_data_stale_days: 30       # inventory older than this is "stale" (A3)
 scan_evidence_validity_days: 14     # critical internet-facing scan evidence (F1)
 risk_acceptance_max_days: 90
+late_discovery_interim_hours: 4     # found already past a deadline: workaround or risk acceptance due within this
 signoff_dispute_escalate_hours: 48  # remediation sign-offs still disagree after this: risk owner, senior management, board
 impact_modifier_threshold: 4        # approved modifier combination that makes High
 

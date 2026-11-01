@@ -66,6 +66,20 @@ def test_replay_lapse_reopened_dependents(rdb):
     assert checks == {"Asset": True, "Component scope": False, "Method": False, "Timestamp": True, "Independence": True}
 
 
+def test_replay_follows_appendix_a_timings(rdb):
+    """Struts fix released 7 Mar 09:00: Emergency, so 48 hours runs to 9 Mar 09:00 whatever day PoliBridge saw it."""
+    db = rdb
+    from app.models import Asset, Notification
+    by = {db.get(Asset, t.asset_id).name.split(" ·")[0]: t for t in db.scalars(
+        select(Task).where(Task.component == "struts2-core", Task.is_test == False))}  # noqa: E712
+    acis = by["ACIS"]
+    assert acis.emergency and acis.remediate_due == datetime(2017, 3, 9, 9, 0)
+    assert acis.deadline_basis["trigger"] == "vendor_release"
+    sent = {n.kind for n in db.scalars(select(Notification).where(Notification.task_id == acis.id))}
+    assert {"escalate_manager", "progress_check", "deadline_missed"} <= sent and "escalate_ciso" not in sent
+    assert by["Credit File API"].closed_at <= by["Credit File API"].remediate_due   # fixed and verified in time
+
+
 def test_canary_view_explains_routing_failure(rdb):
     c = views.canary_view(rdb)
     failed = next(r for r in c["runs"] if r["status"] == "failed")
