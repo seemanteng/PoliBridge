@@ -87,7 +87,7 @@ def _sync_tasks(db, obligation, adv, asset, claim):
                           assigned_to=first_with_role(db, "ciso"))
         t = create_task(db, obligation=obligation, asset=asset, kind=want, impact=info["impact"],
                         component=adv.product, claim=claim, reviewers=info["required_reviewers"],
-                        is_test=obligation.is_test)
+                        is_test=obligation.is_test, emergency=info["emergency"])
         if not obligation.is_test:  # the owner gets advice about this system as it is recorded now (C1)
             from . import rag
             rag.guidance_for_task(db, obligation, t)

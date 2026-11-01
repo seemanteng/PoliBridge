@@ -70,7 +70,7 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
   )
 }
 
-const SEV_RANK: Record<string, number> = { High: 0, Medium: 1, Low: 2 }
+const SEV_RANK: Record<string, number> = { Emergency: -1, High: 0, Medium: 1, Low: 2 }
 
 export function ClaimList() {
   const { data: cs, error } = useApi('/claims')
@@ -81,7 +81,7 @@ export function ClaimList() {
   const [status, setStatus] = useState('')
   const [asset, setAsset] = useState('')
   const [signed, setSigned] = useState('')
-  const sevOf = (c: any) => c.severity?.level || 'Not rated'
+  const sevOf = (c: any) => c.severity?.emergency ? 'Emergency' : c.severity?.level || 'Not rated'
   const signState = (c: any) => !c.signoffs ? 'none' : c.signoffs.disputes > 0 ? 'disputed' : c.signoffs.signed >= c.signoffs.needed ? 'complete' : 'incomplete'
   const shown = (cs || []).filter((c: any) => (!sev || sevOf(c) === sev) && (!type || c.claim_type === type) && (!status || c.status === status)
     && (!asset || c.asset === asset) && (!signed || signState(c) === signed) && has(q, c.statement, c.asset, TYPE[c.claim_type], c.severity?.basis))
@@ -96,7 +96,7 @@ export function ClaimList() {
         <button className="btn primary" onClick={() => setAdding(true)}>New claim</button></div>
       {adding && <NewClaim onClose={() => setAdding(false)} />}
       {cs && <Controls q={q} setQ={setQ} shown={shown.length} total={cs.length} onClear={clear} selects={[
-        { label: 'Severity', value: sev, set: setSev, options: ['High', 'Medium', 'Low', 'Not rated'].filter((s) => cs.some((c: any) => sevOf(c) === s)) },
+        { label: 'Severity', value: sev, set: setSev, options: ['Emergency', 'High', 'Medium', 'Low', 'Not rated'].filter((s) => cs.some((c: any) => sevOf(c) === s)) },
         { label: 'Type', value: type, set: setType, options: uniq(cs.map((c: any) => c.claim_type)).map((k): [string, string] => [k, TYPE[k] || k]) },
         { label: 'Status', value: status, set: setStatus, options: uniq(cs.map((c: any) => c.status)).map((k): [string, string] => [k, pretty(k)]) },
         { label: 'Sign-offs', value: signed, set: setSigned, options: [['complete', 'All signed'], ['incomplete', 'Awaiting sign-off'], ['disputed', 'Disagreement'], ['none', 'Not applicable']] },
@@ -106,7 +106,7 @@ export function ClaimList() {
           <table><thead><tr><th>Claim</th><th>Severity</th><th>Type</th><th>System</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
             <tbody>{shown.map((c: any) => (
               <tr key={c.id}><td><Link to={`/claims/${c.id}`}><b>{c.statement}</b></Link></td>
-                <td>{c.severity?.level ? <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} short />
+                <td>{c.severity?.level ? <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} emergency={c.severity.emergency} short />
                   {c.severity.cvss != null && <div className="faint mono">CVSS {c.severity.cvss}</div>}</span> : <span className="muted">Not rated</span>}</td>
                 <td>{TYPE[c.claim_type]}</td><td>{c.asset}</td>
                 <td>{c.signoffs ? <span title="System owner (IT), Information Security and any impact sign-offs">
@@ -134,7 +134,7 @@ export function ClaimDetail() {
     <>
       <div className="crumbs"><Link to="/claims">Claims</Link> / {c.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><Badge>{TYPE[c.type]}</Badge>
-        {c.severity?.level && <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} /></span>}
+        {c.severity?.level && <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} emergency={c.severity.emergency} /></span>}
         {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{pretty(c.status)}</Badge>}</div>
       <h1>“{c.statement}”</h1>
       <p className="muted">{c.type === 'monitoring' ? 'This claim was only as good as the certificate on the inspection device. When the certificate expired, so did the claim.' : c.reason || 'Evidence life and dependants are shown below.'}</p>

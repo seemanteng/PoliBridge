@@ -27,8 +27,10 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
 const IMPACT: Record<string, string> = { High: 'imp-high', Medium: 'imp-med', Low: 'imp-low' }
 
 // Impact is how much it matters (High, Medium or Low). It drives the deadlines, so it is shown on every list.
-export const ImpactBadge = ({ impact, short = false }: { impact: string; short?: boolean }) => (
-  <Badge kind={IMPACT[impact] || ''}>{impact}{short ? '' : ' impact'}</Badge>
+// Emergency is High impact with a critical or exploited flaw on an internet-facing system (rule C1): 48-hour fix.
+export const ImpactBadge = ({ impact, short = false, emergency = false }: { impact: string; short?: boolean; emergency?: boolean }) => (
+  emergency ? <Badge kind="imp-high emergency">Emergency{short ? '' : ' · High impact'}</Badge>
+    : <Badge kind={IMPACT[impact] || ''}>{impact}{short ? '' : ' impact'}</Badge>
 )
 
 // 'fixed_pending_review' -> 'Fixed pending review'; 'expired' reads as 'Lapsed' everywhere a claim is shown

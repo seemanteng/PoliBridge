@@ -321,6 +321,7 @@ class AdvisoryIn(BaseModel):
     source_name: str = "CISA/NVD"
     description: str | None = None
     published_at: datetime | None = None
+    exploited_at: datetime | None = None  # when a working exploit became known, if later than release
 
 
 @router.get("/advisories/lookup")
@@ -533,6 +534,22 @@ def transfer(tid: int, body: Transfer, db=Depends(get_db), me=Depends(actor)):
     t = one(db, M.Task, tid)
     approver = on_behalf(db, me, approver_for(db, ("bu_head", "manager", "ciso", "risk_owner")), "task", tid, "transfer")
     guarded(lambda: assignment.transfer_task(db, t, one(db, M.Person, body.new_owner_id), approver))(db)
+    return task_view(db, db.get(M.Task, tid))
+
+
+class DeadlineOverride(BaseModel):
+    due: datetime
+    reason: str
+
+
+@router.post("/tasks/{tid}/deadline-override")
+def deadline_override(tid: int, body: DeadlineOverride, db=Depends(get_db), me=Depends(actor)):
+    """Shorten one task's fix deadline for an emergency, obligation or policy (more restrictive wins)."""
+    t = one(db, M.Task, tid)
+    by = me if me.role in assignment.OVERRIDE_ROLES else on_behalf(
+        db, me, approver_for(db, assignment.OVERRIDE_ROLES, avoid=(t.owner_id,)), "task", tid, "deadline_override")
+    due = body.due.replace(tzinfo=None)
+    guarded(lambda: assignment.override_deadline(db, t, due, body.reason, by))(db)
     return task_view(db, db.get(M.Task, tid))
 
 

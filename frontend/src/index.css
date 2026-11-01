@@ -58,6 +58,7 @@ main { flex: 1; min-width: 0; width: 100%; padding: 34px clamp(22px, 3vw, 46px) 
 .badge.lbl-cd { background: #fff0dc; color: var(--orange); border-color: #edc899; }
 .badge.dna { background: #edf2f8; color: #435269; border-color: #cfd9e7; }
 .badge.imp-high { background: #fff0e8; color: #933918; border-color: #eab9a5; }
+.badge.emergency { background: var(--red); color: #fff; border-color: var(--red); }
 .badge.imp-med { background: #fff4d9; color: #755000; border-color: #e8d194; }
 .badge.imp-low { background: #e9f5ed; color: var(--green); border-color: #b9dbc5; }
 .badge.ok { background: #e7f5ec; color: var(--green); border-color: #afdcc3; }

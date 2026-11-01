@@ -50,7 +50,7 @@ export function EvidenceReview() {
       <h1>{e.claim}</h1>
       <p className="muted" style={{ maxWidth: 780 }}>Submitted by {e.submitter}, {fmt(e.submitted_at)}. A negative claim is held to the same standard as a fix: the evidence must have examined the component.</p>
 
-      {e.status === 'rejected' && <div className="note fail" style={{ marginTop: 16 }}><b>{e.reasons.some((r: string) => r.startsWith('Sign-offs disagree')) ? 'Set aside — the remediation sign-offs disagree'
+      {e.status === 'rejected' && <div className="note fail" style={{ marginTop: 16 }}><b>{e.reasons.some((r: string) => r.includes('Sign-offs disagree')) ? 'Set aside — the remediation sign-offs disagree'
         : e.all_pass ? 'Evidence rejected by reviewer'
         : `${e.checks.filter((c: any) => !c.pass && c.check !== 'Independence').map((c: any) => c.check).join(' and ') || 'Automated'} check failed — evidence cannot support this claim`}</b>
         <p>{e.purpose === 'absence' ? `${e.asset} stays at Cannot Determine and the task stays open. ` : 'The task stays open and is escalated to the owner’s manager. '}
@@ -60,7 +60,7 @@ export function EvidenceReview() {
         <p>{e.claim_id ? 'Both sign-offs are in and the claim is recorded.' : <>Next, the system owner (IT) and Information Security must both sign off on the <Link to={`/remediations/${e.task_id}`}>task page</Link>.</>}</p></div>}
 
       <div className="grid g21" style={{ gridTemplateColumns: '1.6fr 1fr' }}>
-        <div className="card"><div className="sec"><h2>Claim versus evidence</h2><span className="faint">Rules E1–E3, E6</span></div>
+        <div className="card"><div className="sec"><h2>Claim versus evidence</h2><span className="faint">Rules E1–E4, E6, E7</span></div>
           <table><thead><tr><th>Check</th><th>Claim requires</th><th>Evidence recorded</th><th>Result</th></tr></thead>
             <tbody>{e.checks.map((c: any) => (
               <tr key={c.check} className={c.pass ? '' : 'bad'}><td><b>{c.check}</b></td><td>{c.requires}</td><td className="mono">{c.recorded}</td>

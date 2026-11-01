@@ -11,14 +11,35 @@ from .common import (notify, raise_finding, first_with_role, people_with_role, b
                      owner_validity, create_claim, add_dependency)
 
 OPEN_STATES = ("open", "reopened", "fixed_pending_review")
+OVERRIDE_ROLES = ("ciso", "risk_owner", "compliance", "cco", "legal")
 
 
-def _deadlines(impact: str, start):
-    t = TIMINGS[impact]
-    ack_due = (add_working_days(start, t["ack_working_days"]) if "ack_working_days" in t
-               else start + timedelta(hours=t["ack_hours"]))
-    interim = start + timedelta(hours=t["interim_hours"]) if t.get("interim_hours") else None
-    return ack_due, interim, start + timedelta(hours=t["remediate_hours"])
+def profile(task: Task) -> str:
+    """Which timing block in timings.yaml applies: Emergency for C1 tasks, otherwise the impact level."""
+    return "Emergency" if task.emergency else task.impact
+
+
+def policy(task: Task) -> dict:
+    return TIMINGS[profile(task)]
+
+
+def _trigger(db, obligation: Obligation, is_test: bool, now) -> tuple[str, object]:
+    """What the fix deadline counts from: the vendor's release, or a later known exploit. Tests, canaries and
+    tasks with no advisory count from discovery."""
+    from ..models import Advisory
+    adv = db.get(Advisory, obligation.advisory_id) if obligation.advisory_id and not is_test else None
+    if adv is None or adv.published_at is None:
+        return "discovered", now
+    if adv.exploited_at and adv.exploited_at > adv.published_at:
+        return "exploit_known", min(adv.exploited_at, now)
+    return "vendor_release", min(adv.published_at, now)
+
+
+def _deadlines(cfg: dict, created, trigger_at):
+    ack_due = (add_working_days(created, cfg["ack_working_days"]) if "ack_working_days" in cfg
+               else created + timedelta(hours=cfg["ack_hours"]))
+    interim = trigger_at + timedelta(hours=cfg["interim_hours"]) if cfg.get("interim_hours") else None
+    return ack_due, interim, trigger_at + timedelta(hours=cfg["remediate_hours"])
 
 
 def is_overdue(task: Task, now=None) -> bool:
@@ -40,18 +61,28 @@ def route(db, asset: Asset) -> tuple[Person | None, str | None]:
 
 def create_task(db, *, obligation: Obligation, asset: Asset, kind: str, impact: str,
                 component: str | None, claim=None, reviewers=None, is_test=False,
-                owner: Person | None = None) -> Task:
+                owner: Person | None = None, emergency: bool = False) -> Task:
     now = clock.now()
     owner, invalid_reason = (owner, None) if owner is not None else route(db, asset)
-    ack_due, interim_due, rem_due = _deadlines(impact, now)
+    emergency = bool(emergency and impact == "High")
+    cfg = TIMINGS["Emergency" if emergency else impact]
+    trigger, trigger_at = _trigger(db, obligation, is_test, now)
+    ack_due, interim_due, rem_due = _deadlines(cfg, now, trigger_at)
+    basis = {"trigger": trigger, "trigger_at": trigger_at.isoformat(), "overdue_at_discovery": rem_due <= now,
+             "interim_reset": False, "override": None}
+    if rem_due <= now or (interim_due and interim_due <= now):
+        # found already late: keep the true fix deadline, but give a short, fresh window to reduce exposure
+        interim_due = now + timedelta(hours=TIMINGS["late_discovery_interim_hours"])
+        basis["interim_reset"] = True
     t = Task(obligation_id=obligation.id, asset_id=asset.id, kind=kind, impact=impact, component=component,
              owner_id=owner.id if owner else None, original_owner_id=asset.owner_id, created_at=now,
-             ack_due=ack_due, interim_due=interim_due, remediate_due=rem_due,
-             required_reviewers=reviewers or [], is_test=is_test)
+             ack_due=ack_due, interim_due=interim_due, remediate_due=rem_due, emergency=emergency,
+             deadline_basis=basis, required_reviewers=reviewers or [], is_test=is_test)
     db.add(t)
     db.flush()
     audit.log(db, "system", "task", t.id, "created", kind=kind, impact=impact, asset=asset.name,
-              owner=owner.directory_id if owner else None, ack_due=str(ack_due), remediate_due=str(rem_due))
+              owner=owner.directory_id if owner else None, ack_due=str(ack_due), remediate_due=str(rem_due),
+              emergency=emergency, trigger=trigger, trigger_at=str(trigger_at))
     if claim is not None:
         add_dependency(db, claim, "task", t.id)
     if invalid_reason:
@@ -60,8 +91,84 @@ def create_task(db, *, obligation: Obligation, asset: Asset, kind: str, impact: 
                       f"{owner.name if owner else 'nobody'}.", assigned_to=owner, is_test=is_test)
         audit.log(db, "system", "task", t.id, "fallback_routed", reason=invalid_reason)
     notify(db, task=t, person=owner, kind="assign",
-           message=f"{impact} {kind} task for {asset.name}: {obligation.title}")
+           message=f"{'Emergency' if emergency else impact} {kind} task for {asset.name}: {obligation.title}")
+    if basis["overdue_at_discovery"]:
+        audit.log(db, "system", "task", t.id, "overdue_at_discovery", remediate_due=str(rem_due),
+                  trigger=trigger, trigger_at=str(trigger_at))
+        _escalate_missed(db, t, asset, "fix deadline had already passed when the issue was found")
     return t
+
+
+def _escalate_missed(db, task: Task, asset: Asset, reason: str):
+    """D3: risk owner and senior management are told, and the item joins the board risk report."""
+    if _sent(db, task, "deadline_missed"):
+        return
+    for p in people_with_role(db, "risk_owner") + people_with_role(db, "senior_mgmt"):
+        notify(db, task=task, person=p, kind="deadline_missed",
+               message=f"Remediation deadline missed: task {task.id} on {asset.name} ({reason})")
+    task.board_flag = True
+    audit.log(db, "system", "task", task.id, "escalated", to="risk_owner+senior_mgmt", reason=reason,
+              board_report=True)
+
+
+def override_deadline(db, task: Task, due, reason: str, by: Person):
+    """A specific obligation, emergency or policy may set a shorter fix deadline. Only shorter: the more
+    restrictive outcome applies (§6.8). A longer one is an exception and needs risk acceptance (D4)."""
+    if by.role not in OVERRIDE_ROLES:
+        raise PermissionError("a deadline override needs the CISO, risk owner, Compliance or Legal")
+    if task.status not in OPEN_STATES:
+        raise ValueError("this task is no longer open")
+    if not (reason or "").strip():
+        raise ValueError("an override needs a recorded reason")
+    if due >= task.remediate_due:
+        raise ValueError("an override can only shorten the deadline; a later date needs risk acceptance (D4)")
+    if due <= clock.now():
+        raise ValueError("the new deadline must be in the future")
+    previous = task.remediate_due
+    task.remediate_due = due
+    if task.interim_due and task.interim_due > due:
+        task.interim_due = due
+    basis = dict(task.deadline_basis or {})
+    basis["override"] = {"due": due.isoformat(), "previous": previous.isoformat(), "reason": reason.strip(),
+                         "by": by.name, "at": clock.now().isoformat()}
+    task.deadline_basis = basis
+    audit.log(db, by.directory_id, "task", task.id, "deadline_overridden", previous=str(previous), due=str(due),
+              reason=reason.strip())
+    owner = db.get(Person, task.owner_id) if task.owner_id else None
+    if owner:
+        notify(db, task=task, person=owner, kind="deadline_overridden",
+               message=f"Task {task.id}: fix now due {due:%d %b %H:%M} ({reason.strip()})")
+
+
+def retime_for_exploit(db, advisory, exploited_at):
+    """A working exploit has become known. Open tasks on internet-facing systems become Emergency, and their fix
+    deadline moves to 48 hours from the exploit if that is sooner. A deadline is never moved later."""
+    from .assessment import _classify
+    advisory.exploited_at = exploited_at
+    obs = db.scalars(select(Obligation).where(Obligation.advisory_id == advisory.id))
+    for ob in obs:
+        for t in db.scalars(select(Task).where(Task.obligation_id == ob.id, Task.status.in_(OPEN_STATES),
+                                               Task.is_test == False)):  # noqa: E712
+            asset = db.get(Asset, t.asset_id)
+            info = _classify(advisory, asset, regulatory=ob.kind == "regulatory")
+            if info["impact"] != "High" or not info["emergency"]:
+                continue
+            due = exploited_at + timedelta(hours=TIMINGS["Emergency"]["remediate_hours"])
+            changed = not t.emergency or due < t.remediate_due
+            t.impact, t.emergency = "High", True
+            if due < t.remediate_due:
+                t.remediate_due = due
+                basis = dict(t.deadline_basis or {})
+                basis.update(trigger="exploit_known", trigger_at=exploited_at.isoformat())
+                t.deadline_basis = basis
+            if changed:
+                audit.log(db, "system", "task", t.id, "exploit_known", exploited_at=str(exploited_at),
+                          remediate_due=str(t.remediate_due))
+                owner = db.get(Person, t.owner_id) if t.owner_id else None
+                if owner:
+                    notify(db, task=t, person=owner, kind="exploit_known",
+                           message=f"Working exploit known for task {t.id} on {asset.name}: now Emergency, "
+                                   f"fix due {t.remediate_due:%d %b %H:%M}")
 
 
 def acknowledge(db, task: Task, person: Person):
@@ -215,7 +322,7 @@ def tick_task(db, task: Task):
     """Evaluate escalation timers for one task against the current clock."""
     if task.status not in OPEN_STATES:
         return
-    now, cfg = clock.now(), TIMINGS[task.impact]
+    now, cfg = clock.now(), policy(task)
     asset = db.get(Asset, task.asset_id)
 
     ok, why = owner_validity(db, asset)
@@ -234,23 +341,28 @@ def tick_task(db, task: Task):
                        message=f"{task.impact} task {task.id} on {asset.name} unacknowledged")
                 audit.log(db, "system", "task", task.id, "escalated", to=rule["to"], reason="unacknowledged")
 
-    if (task.impact == "High" and task.interim_due and now >= task.interim_due
+    # progress check: a status request, not a deadline
+    hours = cfg.get("progress_checkpoint_hours")
+    owner = db.get(Person, task.owner_id) if task.owner_id else None  # may have just been rerouted
+    if (hours and task.status in ("open", "reopened") and now >= task.created_at + timedelta(hours=hours)
+            and owner and not _sent(db, task, "progress_check")):
+        notify(db, task=task, person=owner, kind="progress_check",
+               message=f"{hours}h progress check on task {task.id} ({asset.name}): is the fix in, a workaround in "
+                       "place, or is the work blocked?")
+        audit.log(db, "system", "task", task.id, "progress_check_requested", after_hours=hours)
+
+    if (task.interim_due and now >= task.interim_due and task.status in ("open", "reopened")
             and not task.interim_control and not _has_accepted_risk(db, task)
             and not _sent(db, task, "interim_missing")):
         notify(db, task=task, person=first_with_role(db, "ciso"), kind="interim_missing",
                message=f"No compensating control or risk acceptance for task {task.id} on {asset.name}")
         raise_finding(db, "interim_control_missing", "High", f"Task {task.id}: {asset.name}",
-                      "Unpatched High Impact task has neither a compensating control nor a risk acceptance",
+                      f"Unpatched {profile(task)} task has neither a compensating control nor a risk acceptance",
                       assigned_to=first_with_role(db, "ciso"), is_test=task.is_test)
         audit.log(db, "system", "task", task.id, "escalated", to="ciso", reason="interim control missing")
 
-    if is_overdue(task, now) and not _sent(db, task, "deadline_missed"):
-        for p in people_with_role(db, "risk_owner") + people_with_role(db, "senior_mgmt"):
-            notify(db, task=task, person=p, kind="deadline_missed",
-                   message=f"Remediation deadline missed: task {task.id} on {asset.name}")
-        task.board_flag = True
-        audit.log(db, "system", "task", task.id, "escalated", to="risk_owner+senior_mgmt",
-                  reason="remediation deadline missed", board_report=True)
+    if is_overdue(task, now):
+        _escalate_missed(db, task, asset, "remediation deadline missed")
 
 
 def _has_accepted_risk(db, task: Task) -> bool:
@@ -271,6 +383,7 @@ def countdowns(task: Task) -> dict:
         "remediate_remaining_h": round((task.remediate_due - now).total_seconds() / 3600, 1),
         "interim_remaining_h": (round((task.interim_due - now).total_seconds() / 3600, 1)
                                 if task.interim_due and not task.interim_control else None),
-        "interim_state": ("not_required" if not task.interim_due else "reopened" if task.interim_reopened
-                          else "recorded" if task.interim_control else "pending"),
+        # a workaround can be recorded even when no interim deadline applies (e.g. Emergency, where the fix is due first)
+        "interim_state": ("reopened" if task.interim_reopened else "recorded" if task.interim_control
+                          else "not_required" if not task.interim_due else "pending"),
     }

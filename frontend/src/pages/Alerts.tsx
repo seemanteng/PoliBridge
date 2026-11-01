@@ -5,7 +5,7 @@ import Canary from './Canary'
 
 const hours = (h: number) => (h >= 48 ? `${Math.floor(h / 24)}d ${Math.round(h % 24)}h` : `${Math.round(h)}h`)
 const TYPE: Record<string, [string, string]> = { unsigned: ['cd', 'Unsigned'], overdue: ['over', 'Overdue'], interim: ['high', 'No interim control'],
-  disputed: ['over', 'Sign-offs disagree'] }
+  disputed: ['over', 'Sign-offs disagree'], found_late: ['over', 'Found after deadline'] }
 
 export default function Alerts() {
   const [params, setParams] = useSearchParams()
@@ -32,7 +32,7 @@ function Escalations() {
     <>
       <div className="grid g3">
         <div className="card kpi"><div className="l">Unsigned acknowledgements</div><div className="v"><span className={n('unsigned') ? 'red' : ''}>{n('unsigned')}</span></div><div className="l">owner has not signed off in time</div></div>
-        <div className="card kpi"><div className="l">Overdue remediations</div><div className="v"><span className={n('overdue') ? 'red' : ''}>{n('overdue')}</span></div><div className="l">past their deadline</div></div>
+        <div className="card kpi"><div className="l">Overdue remediations</div><div className="v"><span className={n('overdue') + n('found_late') ? 'red' : ''}>{n('overdue') + n('found_late')}</span></div><div className="l">past their deadline</div></div>
         <div className="card kpi"><div className="l">Other alerts</div><div className="v">{a.findings.length + n('interim')}</div><div className="l">findings and missing interim controls</div></div>
       </div>
 
@@ -41,8 +41,8 @@ function Escalations() {
           <p className="muted">Escalation climbs one step at a time: the owner's manager, then the CISO, then the risk owner and senior management, who also see it in the board report.</p></div></div>
         <table><thead><tr><th>Item</th><th>Owner</th><th>Late by</th><th>Escalated to so far</th><th></th></tr></thead><tbody>
           {a.items.map((i: any) => (
-            <tr key={i.type + i.task_id} className={i.type === 'overdue' ? 'bad' : ''}>
-              <td><Badge kind={TYPE[i.type][0]}>{TYPE[i.type][1]}</Badge> <ImpactBadge impact={i.impact} />
+            <tr key={i.type + i.task_id} className={i.type === 'overdue' || i.type === 'found_late' ? 'bad' : ''}>
+              <td><Badge kind={TYPE[i.type]?.[0] || ''}>{TYPE[i.type]?.[1] || i.type}</Badge> <ImpactBadge impact={i.impact} emergency={i.emergency} />
                 <div><Link to={`/remediations/${i.task_id}`}><b>{i.title}</b></Link></div><div className="faint mono">{i.ref} · {i.what}</div></td>
               <td>{i.owner || '—'}</td><td className="late">{hours(i.late_by_h)}</td>
               <td>{i.escalated_to || <span className="muted">nobody yet</span>}</td>

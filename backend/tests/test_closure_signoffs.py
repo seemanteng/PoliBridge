@@ -125,6 +125,8 @@ def test_information_security_can_disagree_with_a_reason(db, who):
 
 def test_unresolved_disagreement_escalates_once_then_resolves_on_agreement(db, who):
     ob, t, ev = _fixed_portal(db, who)
+    # a task-specific later deadline, so the fix deadline (D3) does not fire first and mask the E8 escalation
+    t.remediate_due = clock.now() + timedelta(days=7)
     closure.dispute_signoff(db, t, "security", who("crhodes"), "scan scope not credible")
     clock.advance(hours=47)
     assert assurance.sweep(db)["escalated_disputes"] == []
@@ -194,13 +196,14 @@ def test_response_rules_explain_each_window(db, who):
     t = task_for(db, ob, "Credit Report Portal", "remediation")
     rr = views.response_rules(db, t)
     rows = {r["key"]: r for r in rr["rows"]}
-    assert t.impact == "High" and set(rows) == {"acknowledge", "interim", "remediate"}
-    assert rows["acknowledge"]["window"] == "24h" and rows["acknowledge"]["state"] == "running"
-    assert "manager at 24h" in rows["acknowledge"]["if_missed"] and "CISO at 48h" in rows["acknowledge"]["if_missed"]
-    assert rows["remediate"]["window"] == "7 days" and all(r["why"] for r in rr["rows"]) and rr["start_note"]
+    assert rr["profile"] == "Emergency" and set(rows) == {"acknowledge", "progress", "remediate"}
+    assert rows["acknowledge"]["window"] == "4h" and rows["acknowledge"]["state"] == "running"
+    assert "manager at 4h" in rows["acknowledge"]["if_missed"] and "CISO at 8h" in rows["acknowledge"]["if_missed"]
+    assert rows["remediate"]["window"] == "48h" and all(r["why"] for r in rr["rows"]) and rr["start_note"]
+    assert rr["trigger"] == "vendor_release" and rows["remediate"]["counts_from"] == "trigger"
     assignment.acknowledge(db, t, who("atan"))
     assert views.response_rules(db, t)["rows"][0]["state"] == "met"
-    clock.advance(days=8)
+    clock.advance(days=3)
     assert {r["key"]: r for r in views.response_rules(db, t)["rows"]}["remediate"]["state"] == "missed"
 
 

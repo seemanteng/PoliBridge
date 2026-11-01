@@ -228,33 +228,31 @@ def run_storyline(db):
     assignment.acknowledge(db, db.get(Task, run.task_id), me("hkowalski"))
     assurance.sweep(db)
 
-    # 8 Mar 09:12 advisory ingested and matched against every asset
+    # 8 Mar 09:12 advisory ingested and matched against every asset. Apache released the fix on 7 Mar, so the
+    # Emergency 48-hour fix deadline (critical, exploited, internet-facing) runs to 9 Mar 09:00, not from today.
     clock.set(D(2017, 3, 8, 9, 12))
     ob = intake.ingest_advisory(db, cve="CVE-2017-5638", product="struts2-core",
                                 affected_versions=[">=2.2.3 <2.3.32", ">=2.5.0 <2.5.10.1"], cvss=9.8, kev=True,
                                 fixed_version="2.3.32, 2.5.10.1",  # as published by NVD / CISA KEV
-                                description=STRUTS_DESCRIPTION)
+                                description=STRUTS_DESCRIPTION, published_at=D(2017, 3, 7, 9, 0))
     tasks = {db.get(Asset, t.asset_id).name.split(" ·")[0]: t
              for t in db.scalars(select(Task).where(Task.obligation_id == ob.id))}
     db.commit()
-    _at(db, D(2017, 3, 8, 16, 5))
-    assignment.acknowledge(db, tasks["ACIS"], me("dwhitfield"))
+    # 8 Mar 11:00: the named owners acknowledge inside 4 hours
+    clock.set(D(2017, 3, 8, 11, 0))
     assignment.acknowledge(db, tasks["Credit File API"], me("madeyemi"))
     assignment.acknowledge(db, tasks["Member portal"], me("hkowalski"))
     assignment.acknowledge(db, tasks["Batch reporting server"], me("sramirez"))
-
-    # 9 Mar: interim compensating control on ACIS, relying on traffic inspection
-    clock.set(D(2017, 3, 9, 17, 40))
-    cert = db.scalar(select(Claim).where(Claim.claim_type == "monitoring"))
-    assignment.record_interim_control(
-        db, tasks["ACIS"], me("dwhitfield"),
-        "Web-application firewall rule on ACIS, with detection relying on traffic inspection (MC-019).", cert)
+    # 8 Mar 13:12: ACIS's fallback owner has not acknowledged after 4 hours -> the manager is told (D1)
+    _at(db, D(2017, 3, 8, 13, 13))
+    clock.set(D(2017, 3, 8, 16, 5))
+    assignment.acknowledge(db, tasks["ACIS"], me("dwhitfield"))
     db.commit()
 
-    # 10-11 Mar: Credit File API patched and verified by an independent reviewer
-    clock.set(D(2017, 3, 10, 14, 0))
+    # 8-9 Mar: Credit File API patched inside the 48 hours and verified by an independent reviewer
+    clock.set(D(2017, 3, 8, 20, 0))
     closure.mark_fixed(db, tasks["Credit File API"], me("madeyemi"))
-    clock.set(D(2017, 3, 11, 9, 30))
+    clock.set(D(2017, 3, 9, 7, 30))
     ev = closure.submit_evidence(db, tasks["Credit File API"], me("madeyemi"), purpose="remediation",
                                  asset_name="Credit File API", component="struts2-core",
                                  scope=["/opt/cfapi/**"], method="authenticated_scan", observed_version="2.3.32",
@@ -269,24 +267,35 @@ def run_storyline(db):
     closure.review_evidence(db, ev, me("amensah"), True, "Authenticated scan covers the component path.")
     db.commit()
 
-    # 11 Mar 03:00: canary after an ownership change on ACIS fails at routing
-    clock.set(D(2017, 3, 11, 3, 0))
-    assurance.run_canary(db, asset("ACIS"))
-    db.commit()
-
-    # 12 Mar: member portal fixed, evidence awaiting independent review
-    clock.set(D(2017, 3, 12, 10, 0))
+    # 9 Mar 08:00: member portal fixed before the deadline; its evidence waits for independent review, which is
+    # not overdue because the owner fixed it in time
+    clock.set(D(2017, 3, 9, 8, 0))
     closure.mark_fixed(db, tasks["Member portal"], me("hkowalski"))
-    clock.set(D(2017, 3, 12, 15, 30))
+    clock.set(D(2017, 3, 9, 8, 30))
     closure.submit_evidence(db, tasks["Member portal"], me("hkowalski"), purpose="remediation",
                             asset_name="Member portal", component="struts2-core", scope=["/opt/member/**"],
                             method="direct_version_check", observed_version="2.5.10.1", timestamp=clock.now())
     db.commit()
 
+    # 9 Mar 09:00: ACIS's 48-hour deadline from the vendor release passes -> risk owner, senior management,
+    # board report (D3). The 24-hour progress check has also gone to its owner.
+    _at(db, D(2017, 3, 9, 9, 13))
+
+    # 9 Mar 17:40: interim compensating control on ACIS, relying on traffic inspection
+    clock.set(D(2017, 3, 9, 17, 40))
+    cert = db.scalar(select(Claim).where(Claim.claim_type == "monitoring"))
+    assignment.record_interim_control(
+        db, tasks["ACIS"], me("dwhitfield"),
+        "Web-application firewall rule on ACIS, with detection relying on traffic inspection (MC-019).", cert)
+    db.commit()
+
+    # 11 Mar 03:00: canary after an ownership change on ACIS fails at routing
+    clock.set(D(2017, 3, 11, 3, 0))
+    assurance.run_canary(db, asset("ACIS"))
+    db.commit()
+
     # 15 Mar 00:00: the inspection certificate has lapsed, taking the monitoring claim with it
     _at(db, D(2017, 3, 15, 0, 0))
-    # 15 Mar 09:12: ACIS remediation deadline passes -> risk owner, senior management, board report
-    _at(db, D(2017, 3, 15, 9, 13))
     # 15 Mar 10:48: a "does not apply" claim for ACIS rests on an unauthenticated, shallow scan
     clock.set(D(2017, 3, 15, 11, 2))
     closure.submit_evidence(db, tasks["ACIS"], me("jpark"), purpose="absence", asset_name="ACIS · consumer dispute portal",

@@ -24,7 +24,7 @@ def _approved_advisory_source(db, name: str) -> Source:
 def ingest_advisory(db, *, cve: str, product: str, affected_versions: list[str], cvss: float | None,
                     kev: bool = False, fixed_version: str | None = None, source_name: str = "CISA/NVD",
                     description: str | None = None, is_canary: bool = False, is_test: bool = False,
-                    published_at=None, received_at=None) -> Obligation:
+                    published_at=None, received_at=None, exploited_at=None) -> Obligation:
     """Fast path (C1): advisories bypass the Compliance/Legal gate and are matched at once. A CVE already ingested
     from another approved source is merged into the same obligation, so owners never get two tasks for one flaw."""
     src = _approved_advisory_source(db, source_name)
@@ -35,10 +35,12 @@ def ingest_advisory(db, *, cve: str, product: str, affected_versions: list[str],
     if not is_canary:
         existing = db.scalar(select(Advisory).where(Advisory.cve == cve, Advisory.is_canary == False))  # noqa: E712
         if existing is not None:
-            return _merge(db, existing, src, entry, fixed_version=fixed_version, description=description)
+            return _merge(db, existing, src, entry, fixed_version=fixed_version, description=description,
+                          exploited_at=exploited_at)
     adv = Advisory(cve=cve, source_id=src.id, product=product, affected_versions=affected_versions, cvss=cvss,
                    kev=kev, fixed_version=fixed_version, description=description, is_canary=is_canary,
-                   published_at=published_at or now, received_at=received_at or now, ingested_at=now, sources=[entry])
+                   published_at=published_at or now, received_at=received_at or now, ingested_at=now, sources=[entry],
+                   exploited_at=exploited_at if kev else None)
     db.add(adv)
     db.flush()
     ob = Obligation(kind="advisory", title=f"{cve}: {product}", advisory_id=adv.id, source_id=src.id,
@@ -55,7 +57,8 @@ def ingest_advisory(db, *, cve: str, product: str, affected_versions: list[str],
     return ob
 
 
-def _merge(db, adv: Advisory, src: Source, entry: dict, *, fixed_version, description) -> Obligation:
+def _merge(db, adv: Advisory, src: Source, entry: dict, *, fixed_version, description,
+           exploited_at=None) -> Obligation:
     ob = db.scalar(select(Obligation).where(Obligation.advisory_id == adv.id))
     if any(e["source"] == src.name for e in adv.sources or []):
         audit.log(db, "system", "advisory", adv.id, "duplicate_ignored", source=src.name)
@@ -64,7 +67,11 @@ def _merge(db, adv: Advisory, src: Source, entry: dict, *, fixed_version, descri
     reassess = False
     if entry["cvss"] is not None and (adv.cvss is None or entry["cvss"] > adv.cvss):
         adv.cvss = entry["cvss"]  # the more severe score stands; unknown never lowers it
+    newly_exploited = entry["kev"] and not adv.kev
     adv.kev = adv.kev or entry["kev"]
+    if newly_exploited:  # a working exploit is now known: open tasks may become Emergency (ASD timing)
+        from .assignment import retime_for_exploit
+        retime_for_exploit(db, adv, exploited_at or clock.now())
     adv.fixed_version = adv.fixed_version or fixed_version
     adv.description = adv.description or description
     pub = entry["published_at"]

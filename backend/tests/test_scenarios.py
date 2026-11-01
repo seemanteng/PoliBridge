@@ -42,29 +42,33 @@ def test_march_2017_replay(db, who):
     ok, blockers = closure.try_close_obligation(db, ob)
     assert not ok and any("Cannot Determine" in b for b in blockers)               # E5
 
-    clock.advance(hours=25)
+    # critical, exploited, internet-facing: Emergency (C1), 48 hours to fix
+    assert acis.emergency and acis.remediate_due - acis.created_at == timedelta(hours=48)
+    clock.advance(hours=5)
     assignment.tick_all(db)
-    assert "escalate_manager" in kinds(db, acis) and "escalate_ciso" not in kinds(db, acis)
+    assert "escalate_manager" in kinds(db, acis) and "escalate_ciso" not in kinds(db, acis)   # D1 at 4h
+    clock.advance(hours=4)
+    assignment.tick_all(db)
+    assert "escalate_ciso" in kinds(db, acis)                                                 # D2 at 8h
+    clock.advance(hours=16)
+    assignment.tick_all(db)
+    assert "progress_check" in kinds(db, acis) and "deadline_missed" not in kinds(db, acis)  # 24h check
     clock.advance(hours=24)
     assignment.tick_all(db)
-    assert "escalate_ciso" in kinds(db, acis)
-    assert "interim_missing" in kinds(db, acis)       # High: 48h interim control missing
-    clock.advance(days=6)
-    assignment.tick_all(db)
-    assert "deadline_missed" in kinds(db, acis) and acis.board_flag
+    assert "deadline_missed" in kinds(db, acis) and acis.board_flag                          # D3 at 48h
 
 
 # 2. unacknowledged or rejected task
-def test_unacknowledged_escalates_at_24h_and_48h(db, who):
+def test_unacknowledged_escalates_at_4h_and_8h(db, who):
     ob = intake.ingest_advisory(db, **STRUTS)
     t = task_for(db, ob, "Credit Report Portal")
-    clock.advance(hours=23)
+    clock.advance(hours=3, minutes=59)
     assignment.tick_all(db)
     assert "escalate_manager" not in kinds(db, t)
-    clock.advance(hours=2)
+    clock.advance(minutes=2)
     assignment.tick_all(db)
-    assert "escalate_manager" in kinds(db, t)
-    clock.advance(hours=24)
+    assert "escalate_manager" in kinds(db, t) and "escalate_ciso" not in kinds(db, t)
+    clock.advance(hours=4)
     assignment.tick_all(db)
     assert "escalate_ciso" in kinds(db, t)
 

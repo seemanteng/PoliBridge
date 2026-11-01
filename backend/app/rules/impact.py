@@ -54,6 +54,8 @@ def classify(*, cvss: float | None, kev: bool, internet_facing: bool | None,
     if not triggers and modifiers >= threshold:
         triggers.append(f"modifier combination ({modifiers}) meets threshold {threshold}")
     return {"impact": level, "triggers": triggers, "unknown": unknown,
+            # C1 also selects the Emergency timings: 48 hours from the vendor's release (timings.yaml)
+            "emergency": bool(sev_critical and exposed),
             "human_review": bool(unknown),  # uncertainty -> human review, never a downgrade
             "required_reviewers": sorted(reviewers),
             "borderline": level == "Medium" and modifiers == threshold - 1}  # C6
