@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
-import { Badge, ImpactBadge, Loading, Modal, useAction } from '../ui'
+import { Badge, ImpactBadge, Loading, Modal, pretty, useAction } from '../ui'
+import { ClaimClosure } from './Signoffs'
 import { Controls } from '../filters'
 import { has, uniq } from '../filterUtils'
-import { ClaimClosure } from './Signoffs'
 
-const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim',
-  risk_acceptance: 'Risk acceptance', source_currency: 'Source currency' }
+const TYPE: Record<string, string> = { applicability: 'Applicability claim', remediation: 'Remediation claim', ownership: 'Ownership claim', monitoring: 'Monitoring claim', risk_acceptance: 'Risk acceptance', source_currency: 'Source up to date' }
 
 const METHODS: [string, string][] = [['authenticated_scan', 'Authenticated scan'], ['direct_version_check', 'Direct version check'], ['sbom', 'SBOM'],
   ['sca', 'Software-composition analysis'], ['attestation', 'Attestation'], ['certificate_check', 'Certificate check'],
@@ -72,18 +71,23 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
 }
 
 const SEV_RANK: Record<string, number> = { High: 0, Medium: 1, Low: 2 }
-const STATUS_LABEL: Record<string, string> = { active: 'Active', expired: 'Lapsed', rejected: 'Rejected', superseded: 'Superseded' }
 
 export function ClaimList() {
-  const { data: all, error } = useApi('/claims')
+  const { data: cs, error } = useApi('/claims')
   const [adding, setAdding] = useState(false)
-  const [f, setF] = useState<Record<string, string>>({})
-  const set = (k: string) => (v: string) => setF({ ...f, [k]: v })
+  const [q, setQ] = useState('')
+  const [sev, setSev] = useState('')
+  const [type, setType] = useState('')
+  const [status, setStatus] = useState('')
+  const [asset, setAsset] = useState('')
+  const [signed, setSigned] = useState('')
   const sevOf = (c: any) => c.severity?.level || 'Not rated'
-  const cs = all ? all.filter((c: any) => has(f.q || '', c.statement, c.asset, c.severity?.basis)
-    && (!f.sev || sevOf(c) === f.sev) && (!f.type || c.claim_type === f.type) && (!f.status || c.status === f.status))
+  const signState = (c: any) => !c.signoffs ? 'none' : c.signoffs.disputes > 0 ? 'disputed' : c.signoffs.signed >= c.signoffs.needed ? 'complete' : 'incomplete'
+  const shown = (cs || []).filter((c: any) => (!sev || sevOf(c) === sev) && (!type || c.claim_type === type) && (!status || c.status === status)
+    && (!asset || c.asset === asset) && (!signed || signState(c) === signed) && has(q, c.statement, c.asset, TYPE[c.claim_type], c.severity?.basis))
     .sort((a: any, b: any) => (SEV_RANK[sevOf(a)] ?? 3) - (SEV_RANK[sevOf(b)] ?? 3)
-      || String(a.expiry || '9').localeCompare(String(b.expiry || '9'))) : null
+      || String(a.expiry || '9').localeCompare(String(b.expiry || '9')))
+  const clear = () => { setQ(''); setSev(''); setType(''); setStatus(''); setAsset(''); setSigned('') }
   return (
     <>
       <div className="head"><div><h1>Claims</h1>
@@ -91,24 +95,26 @@ export function ClaimList() {
           Most severe first, then soonest to lapse.</p></div>
         <button className="btn primary" onClick={() => setAdding(true)}>New claim</button></div>
       {adding && <NewClaim onClose={() => setAdding(false)} />}
-      {all && <Controls q={f.q || ''} setQ={set('q')} shown={cs!.length} total={all.length} onClear={() => setF({})} selects={[
-        { label: 'Severity', value: f.sev || '', set: set('sev'), options: ['High', 'Medium', 'Low', 'Not rated'].filter((s) => all.some((c: any) => sevOf(c) === s)) },
-        { label: 'Type', value: f.type || '', set: set('type'), options: uniq(all.map((c: any) => c.claim_type)).map((k) => [k, TYPE[k] || k] as [string, string]) },
-        { label: 'Status', value: f.status || '', set: set('status'), options: uniq(all.map((c: any) => c.status)).map((k) => [k, STATUS_LABEL[k] || k] as [string, string]) },
-      ]} />}
+      {cs && <Controls q={q} setQ={setQ} shown={shown.length} total={cs.length} onClear={clear} selects={[
+        { label: 'Severity', value: sev, set: setSev, options: ['High', 'Medium', 'Low', 'Not rated'].filter((s) => cs.some((c: any) => sevOf(c) === s)) },
+        { label: 'Type', value: type, set: setType, options: uniq(cs.map((c: any) => c.claim_type)).map((k): [string, string] => [k, TYPE[k] || k]) },
+        { label: 'Status', value: status, set: setStatus, options: uniq(cs.map((c: any) => c.status)).map((k): [string, string] => [k, pretty(k)]) },
+        { label: 'Sign-offs', value: signed, set: setSigned, options: [['complete', 'All signed'], ['incomplete', 'Awaiting sign-off'], ['disputed', 'Disagreement'], ['none', 'Not applicable']] },
+        { label: 'System', value: asset, set: setAsset, options: uniq(cs.map((c: any) => c.asset)) }]} />}
       <div className="card" style={{ marginTop: 16 }}>
         {!cs ? <Loading error={error} /> : (
-          <table><thead><tr><th>Claim</th><th>Severity</th><th>Type</th><th>Asset</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
-            <tbody>{cs.map((c: any) => (
+          <table><thead><tr><th>Claim</th><th>Severity</th><th>Type</th><th>System</th><th>Sign-offs</th><th>Status</th><th>Expiry</th></tr></thead>
+            <tbody>{shown.map((c: any) => (
               <tr key={c.id}><td><Link to={`/claims/${c.id}`}><b>{c.statement}</b></Link></td>
                 <td>{c.severity?.level ? <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} short />
                   {c.severity.cvss != null && <div className="faint mono">CVSS {c.severity.cvss}</div>}</span> : <span className="muted">Not rated</span>}</td>
                 <td>{TYPE[c.claim_type]}</td><td>{c.asset}</td>
-                <td>{c.signoffs ? <span title="Asset owner (IT), Information Security and any impact sign-offs">
+                <td>{c.signoffs ? <span title="System owner (IT), Information Security and any impact sign-offs">
                   {c.signoffs.signed}/{c.signoffs.needed} signed{c.signoffs.disputes > 0 && <span className="faint"> · {c.signoffs.disputes} disagreement{c.signoffs.disputes > 1 ? 's' : ''}</span>}</span>
                   : <span className="muted">—</span>}</td>
-                <td><Badge kind={c.status === 'expired' ? 'cd' : c.status === 'active' ? 'info' : ''}>{c.status === 'expired' ? '? Lapsed' : c.status}</Badge></td>
-                <td className="mono">{fmt(c.expiry, true)}</td></tr>))}</tbody></table>)}
+                <td><Badge kind={c.status === 'expired' ? 'cd' : c.status === 'active' ? 'info' : ''}>{c.status === 'expired' ? '? Lapsed' : pretty(c.status)}</Badge></td>
+                <td className="mono">{fmt(c.expiry, true)}</td></tr>))}
+              {!shown.length && <tr><td colSpan={7}className="muted">No claims match these filters.</td></tr>}</tbody></table>)}
       </div>
     </>
   )
@@ -129,7 +135,7 @@ export function ClaimDetail() {
       <div className="crumbs"><Link to="/claims">Claims</Link> / {c.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><Badge>{TYPE[c.type]}</Badge>
         {c.severity?.level && <span title={c.severity.basis}><ImpactBadge impact={c.severity.level} /></span>}
-        {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{c.status}</Badge>}</div>
+        {lapsed ? <Badge kind="lbl-cd">? Lapsed → Cannot Determine</Badge> : <Badge kind="info">{pretty(c.status)}</Badge>}</div>
       <h1>“{c.statement}”</h1>
       <p className="muted">{c.type === 'monitoring' ? 'This claim was only as good as the certificate on the inspection device. When the certificate expired, so did the claim.' : c.reason || 'Evidence life and dependants are shown below.'}</p>
 

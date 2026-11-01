@@ -298,6 +298,7 @@ def task_detail(db, t: M.Task) -> dict:
     cd = countdowns(t)
     now = clock.now()
     rem = t.remediate_due - now
+    adv = db.get(M.Advisory, ob.advisory_id) if ob.advisory_id else None
     title = (f"Renew {t.component} monitoring on {a.name}" if renewal else
              f"Establish whether {a.name} runs an affected {t.component} version" if t.kind == "investigation"
              else f"Remediate {t.component} on {a.name}")
@@ -329,8 +330,11 @@ def task_detail(db, t: M.Task) -> dict:
                               "An independent reviewer must approve it; approved, time-limited risk acceptance is another disposition."
                               if renewal else f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
                               f"{a.name} and shows the vendor's fixed release or later, accepted by an independent reviewer and "
-                              "signed off by both the asset owner (IT) "
+                              "signed off by both the system owner (IT) "
                               "and Information Security — or approved, time-limited risk acceptance."),
+        "advisory": ({"cve": adv.cve, "product": adv.product, "affected_versions": adv.affected_versions,
+                      "fixed_version": adv.fixed_version, "cvss": adv.cvss, "kev": adv.kev} if adv else None),
+        "scope_paths": [r.rstrip("/") + "/**" for r in a.app_roots or []],
         "dispute": t.signoff_dispute or None,
         "vendor": closure.vendor_fix(db, t) if not renewal else None,
         "response_rules": response_rules(db, t),

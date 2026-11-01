@@ -15,7 +15,7 @@ export function VendorInstruction({ t }: { t: any }) {
           <div className="faint">Published fixed releases: {v.published}{v.issuers?.length > 0 && <> · reported by {v.issuers.join(', ')}</>}</div></li>
         <li>Apply that release, then click <b>Mark fixed</b>.</li>
         <li>Submit evidence: a scan or version check across the component's folder, showing {v.required} or later (rule E6).</li>
-        <li>An independent reviewer accepts it, then the asset owner (IT) and Information Security both sign off.</li>
+        <li>An independent reviewer accepts it, then the system owner (IT) and Information Security both sign off.</li>
       </ol>
       <p className="faint" style={{ margin: '8px 0 0' }}>Can't apply the vendor fix yet? Record the vendor's workaround as an interim control
         {high ? ' (due within 48 hours)' : ''}. It reduces exposure but does not close the task: only the fixed release, verified, or a

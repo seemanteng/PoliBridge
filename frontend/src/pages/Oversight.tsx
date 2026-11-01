@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, fmt, fmtDay, useApi } from '../api'
-import { Badge, Loading, Modal } from '../ui'
+import { Badge, ImpactBadge, InfoTip, Loading, Modal, pretty } from '../ui'
 import { Controls } from '../filters'
 import { has, uniq } from '../filterUtils'
 
 const TABS = [['dashboard', 'Dashboard'], ['log', 'Audit log'], ['notifications', 'Notifications']] as const
-type IssueKey = 'overdue_tasks' | 'cannot_determine' | 'accepted_risks' | 'expired_evidence' | 'failed_deliveries' | 'pending_confirmations' | 'overdue_confirmations' | 'lapsed_monitoring' | 'canary'
+type IssueKey = 'overdue_tasks' | 'cannot_determine' | 'accepted_risks' | 'expired_evidence' | 'failed_deliveries' | 'ownership_confirmations'
 type IssueItem = { label: string; detail: string; href: string }
 const confirmationStatus = (a: any) => a.state === 'overdue' || a.state === 'lapsed'
   ? `Overdue since ${fmtDay(a.due, true)}`
@@ -14,30 +14,30 @@ const confirmationStatus = (a: any) => a.state === 'overdue' || a.state === 'lap
 const FALLBACK: Record<IssueKey, string> = {
   overdue_tasks: '/remediations', cannot_determine: '/claims', accepted_risks: '/remediations',
   expired_evidence: '/claims', failed_deliveries: '/oversight?tab=notifications',
-  pending_confirmations: '/registry?tab=Systems', overdue_confirmations: '/registry?tab=Systems',
-  lapsed_monitoring: '/claims', canary: '/alerts?tab=selftests',
+  ownership_confirmations: '/registry?tab=Systems',
 }
 
 async function relatedRecords(key: IssueKey, oversight: any): Promise<IssueItem[]> {
-  if (Array.isArray(oversight.drilldowns?.[key])) return oversight.drilldowns[key]
   const item = (label: string, detail: string, href: string): IssueItem => ({ label, detail, href })
-  if (key === 'overdue_tasks') return (oversight.overdue || []).map((t: any) =>
-    item(t.title, `${t.owner || 'No owner'} · ${t.late_by} late`, `/remediations/${t.id}`))
-  if (key === 'pending_confirmations' || key === 'overdue_confirmations') {
-    const all = oversight.confirmations || oversight.overdue_confirmations || []
-    return all.filter((a: any) => key === 'overdue_confirmations'
-      ? a.state === 'overdue' || a.state === 'lapsed' : a.state !== 'overdue' && a.state !== 'lapsed')
-      .map((a: any) => item(a.asset, `${a.owner || 'No owner'} · ${confirmationStatus(a)}`,
-        `/registry?tab=Systems&asset=${a.asset_id}`))
+  if (key === 'ownership_confirmations') {
+    const all = oversight.confirmations ?? [
+      ...(oversight.pending_confirmations || []), ...(oversight.overdue_confirmations || []),
+    ]
+    return all.map((a: any) => item(a.asset, `${a.owner || 'No owner'} · ${confirmationStatus(a)}`,
+      `/registry?tab=Systems&asset=${a.asset_id}`))
   }
+  if (key === 'overdue_tasks' && Array.isArray(oversight.overdue)) return oversight.overdue.map((t: any) =>
+    item(t.title, `${t.owner || 'No owner'} · ${t.late_by} late · escalated to ${t.escalated_to || 'no one yet'}`,
+      `/remediations/${t.id}`))
+  if (Array.isArray(oversight.drilldowns?.[key])) return oversight.drilldowns[key]
   if (key === 'failed_deliveries') return (oversight.failed_deliveries || []).map((n: any) =>
     item(`${n.kind.replace(/_/g, ' ')} to ${n.recipient || 'no recipient'}`, n.message,
       `/oversight?tab=notifications&notification=${n.id}`))
-  if (key === 'cannot_determine' || key === 'expired_evidence' || key === 'lapsed_monitoring') {
+  if (key === 'cannot_determine' || key === 'expired_evidence') {
     const claims = await api.get('/claims')
     return claims.filter((c: any) => key === 'cannot_determine'
       ? c.claim_type === 'applicability' && c.status === 'active' && c.value === 'cannot_determine'
-      : c.status === 'expired' && (key !== 'lapsed_monitoring' || c.claim_type === 'monitoring'))
+      : c.status === 'expired')
       .map((c: any) => item(c.asset || c.statement, c.statement, `/claims/${c.id}`))
   }
   if (key === 'accepted_risks') {
@@ -45,9 +45,7 @@ async function relatedRecords(key: IssueKey, oversight: any): Promise<IssueItem[
     return risks.filter((r: any) => r.status === 'approved').map((r: any) =>
       item(`Risk acceptance RA-${r.id}`, `Task ${r.task_id} · expires ${fmt(r.expiry, true)}`, `/remediations/${r.task_id}`))
   }
-  const canary = await api.get('/canary')
-  return canary.runs.filter((r: any) => r.status !== 'running').map((r: any) =>
-    item(r.asset, `${r.ref} · ${r.status}`, `/alerts?tab=selftests&run=${r.id}`))
+  return []
 }
 
 function TabBar({ tab }: { tab: string }) {
@@ -62,9 +60,13 @@ export default function Oversight() {
   const [params] = useSearchParams()
   const tab = params.get('tab') === 'log' ? 'log' : params.get('tab') === 'notifications' ? 'notifications' : 'dashboard'
   if (tab === 'dashboard') return <Dashboard tabs={<TabBar tab={tab} />} />
+  const title = tab === 'log' ? 'Audit log' : 'Notification history'
+  const description = tab === 'log'
+    ? 'A read-only record of the 2,000 most recent actions and system changes. Search or filter to see who changed a record, what happened, and when.'
+    : 'Notifications generated by PoliBridge and their delivery outcome. Use this history to check whether an owner was notified.'
   return (
     <>
-      <div className="head"><div><h1>Oversight</h1><p className="muted">{tab === 'log' ? 'Every action taken in PoliBridge, newest first. Nothing here can be edited.' : 'Every notification PoliBridge has sent, and whether it was delivered.'}</p></div></div>
+      <div className="head"><div><div className="crumbs">Oversight</div><h1>{title}</h1><p className="muted">{description}</p></div></div>
       <TabBar tab={tab} />
       {tab === 'log' ? <AuditLog /> : <Notifications />}
     </>
@@ -79,12 +81,16 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
   const navigate = useNavigate()
   if (!o) return <Loading error={error} />
   const k = o.kpis
-  const confirmations = o.confirmations || o.overdue_confirmations || []
-  const overdueConfirmations = k.pending_confirmations === undefined
-    ? confirmations.filter((a: any) => a.state === 'overdue' || a.state === 'lapsed').length
-    : k.overdue_confirmations
-  const pendingConfirmations = k.pending_confirmations === undefined
-    ? confirmations.length - overdueConfirmations : k.pending_confirmations
+  const confirmations = o.confirmations ?? [
+    ...(o.pending_confirmations || []), ...(o.overdue_confirmations || []),
+  ]
+  const overdueConfirmations = k.overdue_confirmations ??
+    confirmations.filter((a: any) => a.state === 'overdue' || a.state === 'lapsed').length
+  const pendingConfirmations = k.pending_confirmations ??
+    confirmations.filter((a: any) => a.state !== 'overdue' && a.state !== 'lapsed').length
+  const unscheduledConfirmations = confirmations.filter((a: any) => a.state === 'unscheduled').length
+  const awaitingConfirmations = Math.max(0, pendingConfirmations - unscheduledConfirmations)
+  const totalConfirmations = pendingConfirmations + overdueConfirmations
   const openIssue = async (key: IssueKey, title: string) => {
     setLoadingKey(key)
     try {
@@ -98,110 +104,78 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
       setLoadingKey(null)
     }
   }
-  const tone: Partial<Record<IssueKey, string>> = {
-    overdue_tasks: 'tone-danger', failed_deliveries: 'tone-danger', overdue_confirmations: 'tone-danger',
-    cannot_determine: 'tone-warning', pending_confirmations: 'tone-warning',
-    expired_evidence: 'tone-purple', canary: 'tone-purple', accepted_risks: 'tone-good',
-  }
-  const kpi = (key: IssueKey, label: string, value: React.ReactNode, sub: React.ReactNode, cls = '') => (
-    <button type="button" className={`card kpi kpi-link ${tone[key] || ''} ${cls}`} onClick={() => openIssue(key, label)}
-      aria-label={`${label}: ${typeof value === 'number' || typeof value === 'string' ? value : ''}. Open related records`}>
-      <div className="l">{label}</div><div className="v">{value}</div><div className="l">{sub}</div>
-      <div className="kpi-open">{loadingKey === key ? 'Opening…' : 'View records →'}</div>
-    </button>
+  const kpi = (key: IssueKey, label: string, value: number | string, sub: React.ReactNode, info: string, cls = '') => (
+    <div className="kpi-shell">
+      <button type="button" className={`card kpi kpi-link ${cls}`} onClick={() => openIssue(key, label)}
+        disabled={loadingKey !== null && loadingKey !== key}
+        aria-label={`${label}: ${value}. ${typeof sub === 'string' ? sub : ''} View related records`}>
+        <span className="kpi-title">{label}</span><span className="v">{value}</span><span className="kpi-description">{sub}</span>
+        <span className="kpi-open">{loadingKey === key ? 'Opening…' : 'View records'} <span aria-hidden="true">→</span></span>
+      </button>
+      <InfoTip label={label}>{info}</InfoTip>
+    </div>
   )
   return (
     <>
       <div className="head">
         <div>
           <h1>Oversight</h1>
-          <p className="muted">Monitor overdue actions, ownership confirmations, evidence validity, and notification delivery.</p>
+          <p className="muted">See work past its deadline, open decisions, expired evidence, delivery failures, and systems needing an owner check. Select a count to open its records.</p>
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <span className="chip">SYNTHETIC DATA · {fmt(o.now, true).toUpperCase()}</span>
-          <button className="btn primary" onClick={() => setBoard(true)}>Management summary</button>
+          <span className="chip">DEMO DATA · {fmt(o.now, true).toUpperCase()}</span>
+          <button className="btn primary" onClick={() => setBoard(true)}>Board report preview</button>
         </div>
       </div>
 
       {tabs}
-      <h2 className="oversight-group-title">Items requiring attention</h2>
+      <h2 className="oversight-group-title">Needs attention</h2>
+      <p className="oversight-section-note">Current items that may need follow-up. Counts open the underlying records.</p>
       <div className="grid oversight-cards">
-        {kpi('overdue_tasks', 'Overdue actions', k.overdue_tasks,
-          `${o.high_overdue} high impact · remediation or investigation deadlines passed`)}
-        {kpi('cannot_determine', 'Applicability unresolved', k.cannot_determine,
-          'Further assessment is needed to determine impact', 'cdk')}
-        {kpi('expired_evidence', 'Expired evidence', k.expired_evidence,
-          k.lapsed_monitoring ? `Includes ${k.lapsed_monitoring} monitoring control${k.lapsed_monitoring === 1 ? '' : 's'} requiring re-verification`
-            : 'Supporting evidence requires renewal')}
+        {kpi('overdue_tasks', 'Overdue work', k.overdue_tasks,
+          `${o.high_overdue} high impact · open task deadlines have passed`,
+          'Counts open remediation and investigation tasks whose deadline has passed. High impact work is escalated, so these records are a useful place to check for immediate follow-up.',
+          k.overdue_tasks ? 'tone-danger' : 'tone-good')}
+        {kpi('cannot_determine', 'Open applicability decisions', k.cannot_determine,
+          'Available evidence has not yet shown whether a requirement applies',
+          'Counts active applicability claims still marked “Cannot Determine.” The system evidence is not enough to confirm whether a requirement applies; resolving these decisions clarifies exposure.',
+          k.cannot_determine ? 'tone-warning' : 'tone-good')}
+        {kpi('expired_evidence', 'Expired evidence claims', k.expired_evidence,
+          k.lapsed_monitoring ? `${k.lapsed_monitoring} monitoring claim${k.lapsed_monitoring === 1 ? '' : 's'} included`
+            : 'Claims whose supporting evidence has expired',
+          'Counts claims whose evidence has passed its expiry date, including monitoring claims. Expired evidence can reopen dependent decisions, so it should be renewed or checked again.',
+          k.expired_evidence ? 'tone-warning' : 'tone-good')}
         {kpi('failed_deliveries', 'Failed notifications', k.failed_deliveries,
-          'Notifications that did not reach their recipients')}
+          'Messages marked as not delivered to their recipient',
+          'Counts non-test notifications marked as undelivered. A failed delivery can leave an owner unaware of a required action.',
+          k.failed_deliveries ? 'tone-danger' : 'tone-good')}
       </div>
 
-      <h2 className="oversight-group-title">Ownership confirmations</h2>
+      <h2 className="oversight-group-title">Ownership &amp; approved exceptions</h2>
+      <p className="oversight-section-note">Keep accountable owners current and review time-limited decisions.</p>
       <div className="grid oversight-cards oversight-cards-two">
-        {kpi('pending_confirmations', 'Pending confirmations', pendingConfirmations,
-          'Awaiting owner confirmation before the due date')}
-        {kpi('overdue_confirmations', 'Overdue confirmations', overdueConfirmations,
-          'Owner confirmation was not completed by the due date')}
-      </div>
-      {!o.drilldowns && <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Due dates are unavailable from the currently running backend.</p>}
-
-      <h2 className="oversight-group-title">Assurance checks</h2>
-      <div className="grid oversight-cards oversight-cards-two">
-        {kpi('accepted_risks', 'Active risk acceptances', k.accepted_risks,
-          o.risk_expiring_soon ? `${o.risk_expiring_soon} expire within ${o.risk_expiring_days} days` : 'Approved exceptions under review')}
-        {kpi('canary', 'Notification test results', k.canary.runs ? `${k.canary.passed}/${k.canary.runs}` : '—',
-          k.canary.runs ? `${k.canary.runs - k.canary.passed} failed · verifies delivery and escalation` : 'No completed tests yet')}
+        {kpi('ownership_confirmations', 'Systems needing owner confirmation', totalConfirmations,
+          `${overdueConfirmations} overdue · ${awaitingConfirmations} awaiting${unscheduledConfirmations ? ` · ${unscheduledConfirmations} without a due date` : ''}`,
+          'Counts systems whose owner has not completed a current confirmation. The total combines confirmations that are awaiting their due date, overdue, or missing a due date; use the status details to prioritize follow-up.',
+          overdueConfirmations ? 'tone-danger' : totalConfirmations ? 'tone-warning' : 'tone-good')}
+        {kpi('accepted_risks', 'Approved risk exceptions', k.accepted_risks,
+          o.risk_expiring_soon ? `${o.risk_expiring_soon} expire within 7 days` : 'Time-limited exceptions currently in force',
+          'Counts approved risk acceptances that are still active. These are time-limited exceptions; review ones nearing expiry before they lapse.',
+          o.risk_expiring_soon ? 'tone-warning' : '')}
       </div>
 
-      <div className="grid g21" style={{ gridTemplateColumns: '1fr 1fr', marginTop: 16 }}>
-        <div className="card">
-          <div className="sec"><h2>Messages that did not arrive</h2><Link to="/oversight?tab=notifications">All notifications</Link></div>
-          {o.failed_deliveries.slice(0, 6).map((n: any) => <p key={n.id} style={{ margin: '8px 0' }}>
-            <Link to={`/oversight?tab=notifications&notification=${n.id}`}><b>{n.kind.replace(/_/g, ' ')}</b> to {n.recipient || 'no recipient'}</Link> · {fmt(n.ts, true)}
-            {n.task_id && <> · <Link to={`/remediations/${n.task_id}`}>Task {n.task_id}</Link></>}
-          </p>)}
-          {!o.failed_deliveries.length && <p className="muted">No failed deliveries.</p>}
-        </div>
-        <div className="card">
-          <div className="sec"><h2>Owners who need to confirm</h2><Link to="/registry">Registry</Link></div>
-          {confirmations.slice(0, 6).map((a: any) => <p key={a.asset_id} style={{ margin: '8px 0' }}>
-            <Link to={`/registry?tab=Systems&asset=${a.asset_id}`}><b>{a.asset}</b></Link> · {a.owner || 'No owner'} · {confirmationStatus(a)}
-          </p>)}
-          {!confirmations.length && <p className="muted">All ownership confirmations are current.</p>}
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="sec"><h2>Who changed the mailing list</h2><Link to="/oversight?tab=log">Full audit log</Link></div>
-        {o.mailing_list_changes.slice(0, 6).map((e: any) => <p key={e.id} style={{ margin: '8px 0' }}>
-          <span className="mono muted">{fmt(e.ts, true)}</span> · <Link to={`/registry?tab=Systems&asset=${e.asset_id}`}><b>{e.asset}</b></Link> · {e.action.replace(/_/g, ' ')} · {e.actor}
-        </p>)}
-        {!o.mailing_list_changes.length && <p className="muted">No mailing-list changes recorded.</p>}
-      </div>
-
-      <div className="grid g21" style={{ gridTemplateColumns: '1.1fr 1fr' }}>
-        <div className="card">
-          <div className="sec"><h2>Late tasks</h2><Link to="/remediations">All work</Link></div>
-          <table>
-            <thead><tr><th>Remediation</th><th>Owner</th><th>Late by</th><th>Escalated to</th></tr></thead>
-            <tbody>
-              {o.overdue.map((t: any) => (
-                <tr key={t.id}>
-                  <td><Link to={`/remediations/${t.id}`}><b>{t.title}</b></Link><div className="faint mono">{t.ref} · {t.impact}</div></td>
-                  <td>{t.owner}{t.owner_note && <div className="faint">{t.owner_note}</div>}</td>
-                  <td className="late">{t.late_by}</td>
-                  <td>{t.escalated_to}</td>
-                </tr>
-              ))}
-              {!o.overdue.length && <tr><td colSpan={4} className="muted">Nothing overdue.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
-          <div className="sec"><h2>Recently invalidated checks</h2><Link to="/claims">All checks</Link></div>
+      <h2 className="oversight-group-title">Recent activity</h2>
+      <p className="oversight-section-note">A short, dated trail of evidence changes and summary recipient updates.</p>
+      <div className="grid oversight-activity-grid">
+        <div className="card oversight-activity-card">
+          <div className="sec oversight-card-head">
+            <h2>Recent evidence events</h2>
+            <div className="oversight-card-tools"><Link to="/claims">All claims</Link>
+              <InfoTip label="Recent evidence events">Expired claims and rejected applicability claims from the last 45 days. The summary count above includes all expired claims, while this list shows only recent changes.</InfoTip>
+            </div>
+          </div>
           {o.lapsed.map((l: any, i: number) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '52px 1fr', gap: 10, padding: '10px 0', borderBottom: '1px solid #efede6' }}>
+            <div key={i} className="oversight-event-row">
               <span className="mono muted">{fmtDay(l.ts)}</span>
               <div>
                 {l.claim_id ? <Link to={`/claims/${l.claim_id}`}><b>{l.statement}</b></Link> : <b>{l.statement}</b>}
@@ -209,18 +183,33 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
               </div>
             </div>
           ))}
-          {!o.lapsed.length && <p className="muted">No recent lapses.</p>}
+          {!o.lapsed.length && <p className="muted">No evidence changes in the last 45 days.</p>}
+        </div>
+        <div className="card oversight-activity-card">
+          <div className="sec oversight-card-head">
+            <h2>Recent summary recipient changes</h2>
+            <div className="oversight-card-tools"><Link to="/oversight?tab=log">Full audit log</Link>
+              <InfoTip label="Summary recipient changes">Recent changes to the people who receive system summary broadcasts. Task notices and escalations still go directly to the system owner.</InfoTip>
+            </div>
+          </div>
+          {o.mailing_list_changes.slice(0, 6).map((e: any) => (
+            <div key={e.id} className="oversight-change-row">
+              <span className="mono muted">{fmt(e.ts, true)}</span>
+              <span><Link to={`/registry?tab=Systems&asset=${e.asset_id}`}><b>{e.asset}</b></Link> · {e.action.replace(/_/g, ' ')} · {e.actor}</span>
+            </div>
+          ))}
+          {!o.mailing_list_changes.length && <p className="muted">No recipient changes recorded.</p>}
         </div>
       </div>
 
       {o.canary_failure && (
-        <div className="card" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 20 }}>
+        <div className="card oversight-selftest" style={{ marginTop: 16 }}>
           <div style={{ flex: 1 }}>
-            <div className="mono faint">SELF-TEST · {o.canary_failure.ref} · {o.canary_failure.asset.split(' ·')[0].toUpperCase()}</div>
-            <h2 style={{ fontSize: 17, margin: '4px 0' }}>A notification self-test failed</h2>
-            <p className="muted">{o.canary_failure.failures[0]}. Reported separately from operational metrics.</p>
+            <div className="mono faint">NOTIFICATION TEST · {o.canary_failure.ref}</div>
+            <h2 style={{ fontSize: 17, margin: '4px 0' }}>A notification routing test failed</h2>
+            <p className="muted">The test checks message delivery and escalation paths. {o.canary_failure.failures[0]}</p>
           </div>
-          <Link className="btn" to="/alerts?tab=selftests" style={{ textDecoration: 'none' }}>View canary run</Link>
+          <Link className="btn" to={`/alerts?tab=selftests&run=${o.canary_failure.id}`} style={{ textDecoration: 'none' }}>View test results</Link>
         </div>
       )}
       {board && <BoardSummary onClose={() => setBoard(false)} />}
@@ -235,27 +224,64 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
 }
 
 function BoardSummary({ onClose }: { onClose: () => void }) {
-  const { data: b } = useApi('/board-summary')
+  const { data: b, error } = useApi('/board-summary')
   return (
-    <Modal title="Board risk summary" sub="Missed remediation deadlines escalate to the risk owner and appear here." onClose={onClose}>
-      {!b ? <Loading /> : (
+    <Modal title="Board report preview" sub="A read-only snapshot of work flagged for board follow-up, with risk exceptions and operational signals for context. This does not submit or send a report." onClose={onClose} wide>
+      {!b ? <Loading error={error} /> : (
         <>
-          <h2 style={{ marginTop: 14, fontSize: 13 }}>Items for the next board risk report</h2>
-          {b.board_risk_items.map((t: any) => (
-            <p key={t.task} style={{ padding: '6px 0', borderBottom: '1px solid #efede6' }}>
-              TSK-{String(t.task).padStart(4, '0')} · {t.asset} · {t.impact} · due {fmt(t.remediate_due)} · {t.status}
-            </p>
-          ))}
-          {!b.board_risk_items.length && <p className="muted">None.</p>}
-          <h2 style={{ marginTop: 14, fontSize: 13 }}>Accepted risks</h2>
-          {b.accepted_risks.map((r: any) => <p key={r.id}>RA-{r.id} on task {r.task}, expires {fmt(r.expiry)}</p>)}
-          {!b.accepted_risks.length && <p className="muted">None.</p>}
-          <h2 style={{ marginTop: 14, fontSize: 13 }}>Canary failures</h2>
-          {b.canary_failures.map((c: string) => <p key={c}>{c}</p>)}
-          {!b.canary_failures.length && <p className="muted">None.</p>}
-          <p className="muted">{b.failed_deliveries} failed deliveries · {b.pending_confirmations === undefined
-            ? `${b.overdue_confirmations} ownership confirmations needing action`
-            : `${b.pending_confirmations} pending confirmations · ${b.overdue_confirmations} overdue confirmations`} · {b.open_findings} open operational findings</p>
+          <div className="oversight-board-meta">Snapshot as of <b>{fmt(b.period_end, true)}</b></div>
+
+          <section className="oversight-board-section">
+            <div className="oversight-board-section-head">
+              <div><h3>Tasks flagged for board follow-up</h3>
+                <p>These tasks were marked for senior or risk-owner attention, such as after a missed deadline, unresolved approval dispute, or high-impact reopening.</p></div>
+              <span className="oversight-board-count">{b.board_risk_items.length}</span>
+            </div>
+            {b.board_risk_items.length ? (
+              <div className="table-scroll">
+                <table className="oversight-board-table"><thead><tr><th>Task</th><th>System</th><th>Impact</th><th>Due</th><th>Status</th></tr></thead>
+                  <tbody>{b.board_risk_items.map((t: any) => (
+                    <tr key={t.task}><td><Link to={`/remediations/${t.task}`} onClick={onClose}>TSK-{String(t.task).padStart(4, '0')}</Link></td>
+                      <td>{t.asset}</td><td><ImpactBadge impact={t.impact} short /></td><td>{fmt(t.remediate_due, true)}</td><td>{pretty(t.status)}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <p className="oversight-board-empty">No tasks are currently flagged for the next board report.</p>}
+          </section>
+
+          <div className="oversight-board-columns">
+            <section className="oversight-board-section">
+              <div className="oversight-board-section-head">
+                <div><h3>Approved risk exceptions</h3><p>Time-limited approvals that leadership may want to review.</p></div>
+                <span className="oversight-board-count">{b.accepted_risks.length}</span>
+              </div>
+              {b.accepted_risks.length ? <ul className="oversight-board-list">{b.accepted_risks.map((r: any) => (
+                <li key={r.id}><Link to={`/remediations/${r.task}`} onClick={onClose}><b>RA-{r.id}</b> · Task TSK-{String(r.task).padStart(4, '0')}</Link>
+                  <span>Expires {fmt(r.expiry, true)}</span></li>
+              ))}</ul> : <p className="oversight-board-empty">No approved exceptions.</p>}
+            </section>
+
+            <section className="oversight-board-section">
+              <div className="oversight-board-section-head">
+                <div><h3>Notification test failures</h3><p>Synthetic checks that found a delivery or escalation problem.</p></div>
+                <span className="oversight-board-count">{b.canary_failures.length}</span>
+              </div>
+              {b.canary_failures.length ? <ul className="oversight-board-list">{b.canary_failures.map((c: string) => <li key={c}>{c}</li>)}</ul>
+                : <p className="oversight-board-empty">No notification test failures.</p>}
+            </section>
+          </div>
+
+          <section className="oversight-board-section oversight-board-signals">
+            <div className="oversight-board-section-head">
+              <div><h3>Current operating signals</h3><p>Useful context for the report; these counts are not themselves board-flagged tasks.</p></div>
+            </div>
+            <div className="oversight-board-signal-grid">
+              <div><strong>{b.failed_deliveries}</strong><span>Failed notifications</span><small>Messages marked undelivered; excludes self-tests.</small></div>
+              <div><strong>{b.pending_confirmations ?? '—'}</strong><span>Owner confirmations pending</span><small>Awaiting a response or missing a due date.</small></div>
+              <div><strong>{b.overdue_confirmations}</strong><span>Owner confirmations overdue</span><small>Past the confirmation due date.</small></div>
+              <div><strong>{b.open_findings}</strong><span>Open operational findings</span><small>Follow-up items, excluding test findings.</small></div>
+            </div>
+          </section>
         </>
       )}
       <div className="actions"><button className="btn" onClick={onClose}>Close</button></div>
@@ -263,32 +289,96 @@ function BoardSummary({ onClose }: { onClose: () => void }) {
   )
 }
 
-const LINK: Record<string, string> = { task: '/remediations', obligation: '/acknowledgements', claim: '/claims', evidence: '/evidence' }
-const detailText = (d: Record<string, unknown> | null) => Object.entries(d || {}).filter(([, v]) => v !== null && v !== '' && v !== undefined)
-  .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join(' · ')
+const titleWords = (value: string) => value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+const ACTOR_LABELS: Record<string, string> = {
+  system: 'PoliBridge system', feed: 'Advisory feed', canary: 'Notification self-test',
+  directory: 'Directory update', seed: 'Demo setup',
+}
+const RECORD_LABELS: Record<string, string> = {
+  asset: 'System', business_unit: 'Business unit', obligation: 'Requirement', task: 'Remediation task',
+  evidence: 'Evidence review', claim: 'Evidence claim', person: 'Person', source: 'Information source',
+  source_version: 'Source version', feed_item: 'Security advisory', guidance: 'Guidance',
+  risk_acceptance: 'Risk exception', finding: 'Finding', canary_run: 'Notification test',
+  board_item: 'Board item', document: 'Document', advisory: 'Security advisory',
+}
+const ACTION_LABELS: Record<string, string> = {
+  created_from_advisory: 'Requirement created from advisory', corroborated: 'Advisory confirmed by another source',
+  duplicate_ignored: 'Duplicate advisory ignored', component_inventory_imported: 'Software inventory imported',
+  component_version_changed: 'Software version changed', owner_reassigned: 'System owner reassigned',
+  fallback_routed: 'Task routed to a backup owner', entered_on_behalf: 'Action recorded for another person',
+  marked_fixed: 'Work marked fixed', absence_claim_rejected: 'Evidence did not support “Does Not Apply”',
+  awaiting_required_signoffs: 'Waiting for required approvals', required_signoff: 'Approval recorded',
+  reminder_sent: 'Reminder sent', summary_broadcast: 'System summary sent',
+  mailing_list_added: 'Summary recipient added', mailing_list_updated: 'Summary recipient updated',
+  mailing_list_removed: 'Summary recipient removed', source_review_lapsed: 'Source review expired',
+  signoff_dispute_resolved: 'Approval disagreement resolved', specific_evidence_requested: 'More evidence requested',
+}
+const NOTIFICATION_LABELS: Record<string, string> = {
+  assign: 'Task assigned', reminder: 'Owner reminder', deadline_missed: 'Missed deadline escalation',
+  escalate_manager: 'Manager escalation', escalate_ciso: 'CISO escalation', expiry: 'Evidence expiry reminder',
+  evidence_rejected: 'Evidence rejected', evidence_requested: 'More evidence requested',
+  signoff_requested: 'Approval requested', signoff_overdue: 'Overdue approval reminder',
+  signoff_disagreement: 'Approval disagreement', signoff_disputed: 'Approval dispute escalation',
+  dispute_unresolved: 'Unresolved dispute escalation', risk_acceptance_expired: 'Risk exception expired',
+  reopened: 'Work reopened', attestation_due: 'Owner confirmation reminder',
+  guidance_released: 'Guidance sent', guidance_approval: 'Guidance approval requested',
+  interim_missing: 'Interim control missing', source_review_overdue: 'Source review overdue',
+  feed_silent: 'Advisory feed stopped responding', system_summary: 'System summary',
+}
+const DETAIL_LABELS: Record<string, string> = {
+  for_name: 'For', for_person: 'Person ID', from_owner: 'Previous owner', to_owner: 'New owner',
+  because: 'Reason', did: 'Action on their behalf',
+}
+const RECORD_LINKS: Record<string, string> = {
+  task: '/remediations', obligation: '/acknowledgements', claim: '/claims', evidence: '/evidence',
+}
+const actorLabel = (actor: string, people: any[]) =>
+  people.find((person: any) => person.directory_id === actor)?.name || ACTOR_LABELS[actor] || titleWords(actor || 'unknown')
+const recordTypeLabel = (entity: string) => RECORD_LABELS[entity] || titleWords(entity || 'record')
+const actionLabel = (action: string) => ACTION_LABELS[action] || titleWords(action || 'updated')
+const notificationLabel = (kind: string) => NOTIFICATION_LABELS[kind] || titleWords(kind || 'Notification')
+const detailText = (detail: Record<string, unknown> | null) => Object.entries(detail || {})
+  .filter(([, value]) => value !== null && value !== '' && value !== undefined)
+  .map(([key, value]) => {
+    const readableValue = Array.isArray(value) ? value.join(', ') :
+      typeof value === 'object' ? JSON.stringify(value) : String(value)
+    return `${DETAIL_LABELS[key] || titleWords(key)}: ${readableValue}`
+  }).join(' · ')
+const recordLabel = (event: any) => event.entity === 'task' && event.entity_id
+  ? `Remediation task TSK-${String(event.entity_id).padStart(4, '0')}`
+  : `${recordTypeLabel(event.entity)}${event.entity_id ? ` #${event.entity_id}` : ''}`
+const recordHref = (event: any) => event.entity === 'asset' && event.entity_id
+  ? `/registry?tab=Systems&asset=${event.entity_id}`
+  : RECORD_LINKS[event.entity] && event.entity_id ? `${RECORD_LINKS[event.entity]}/${event.entity_id}` : null
 
 function AuditLog() {
   const { data: ev, error } = useApi('/timeline')
+  const { data: people, error: peopleError } = useApi('/people')
   const [f, setF] = useState<Record<string, string>>({})
   const [rows, setRows] = useState(100)
-  if (!ev) return <Loading error={error} />
+  if (!ev || !people) return <Loading error={error || peopleError} />
   const set = (k: string) => (v: string) => setF((x) => ({ ...x, [k]: v }))
-  const shown = ev.filter((e: any) => has(f.q || '', e.actor, e.entity, e.action, detailText(e.detail), e.entity_id)
+  const shown = ev.filter((e: any) => has(f.q || '', actorLabel(e.actor, people), e.actor, recordLabel(e), actionLabel(e.action), detailText(e.detail))
     && (!f.entity || e.entity === f.entity) && (!f.actor || e.actor === f.actor) && (!f.action || e.action === f.action))
   return (
     <>
-      <Controls q={f.q || ''} setQ={set('q')} shown={shown.length} total={ev.length} onClear={() => setF({})} selects={[
-        { label: 'Record type', value: f.entity || '', set: set('entity'), options: uniq(ev.map((e: any) => e.entity)) },
-        { label: 'Who', value: f.actor || '', set: set('actor'), options: uniq(ev.map((e: any) => e.actor)) },
-        { label: 'Action', value: f.action || '', set: set('action'), options: uniq(ev.map((e: any) => e.action)) }]} />
+      <div className="note oversight-context">
+        <b>How to read this log</b>
+        <p>Each row is a recorded action. People are shown by name; automated activity is labelled by its source. The details explain the reason or values involved. This log is read-only.</p>
+      </div>
+      <Controls q={f.q || ''} setQ={set('q')} shown={shown.length} total={ev.length} onClear={() => setF({})}
+        searchLabel="Search the audit log" searchPlaceholder="Search people, records, or actions…" countLabel="events" selects={[
+        { label: 'Record area', value: f.entity || '', set: set('entity'), options: uniq(ev.map((e: any) => e.entity)).map((entity) => [entity, recordTypeLabel(entity)] as [string, string]) },
+        { label: 'Changed by', value: f.actor || '', set: set('actor'), options: uniq(ev.map((e: any) => e.actor)).map((actor) => [actor, actorLabel(actor, people)] as [string, string]) },
+        { label: 'Event', value: f.action || '', set: set('action'), options: uniq(ev.map((e: any) => e.action)).map((action) => [action, actionLabel(action)] as [string, string]) }]} />
       <div className="card" style={{ marginTop: 14 }}>
-        <table><thead><tr><th>When</th><th>Who</th><th>Record</th><th>Action</th><th>Details</th></tr></thead><tbody>
+        <table className="oversight-log-table"><thead><tr><th>When</th><th>Changed by</th><th>Record affected</th><th>What happened</th><th>More information</th></tr></thead><tbody>
           {shown.slice(0, rows).map((e: any) => (
-            <tr key={e.id}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(e.ts, true)}</td><td>{e.actor}</td>
-              <td>{LINK[e.entity] && e.entity_id ? <Link to={`${LINK[e.entity]}/${e.entity_id}`}>{e.entity} #{e.entity_id}</Link> : <>{e.entity}{e.entity_id ? ` #${e.entity_id}` : ''}</>}</td>
-              <td><b>{e.action.replace(/_/g, ' ')}</b></td><td className="muted" style={{ maxWidth: 420 }}>{detailText(e.detail)}</td></tr>))}
-          {!shown.length && <tr><td colSpan={5} className="muted">No events match.</td></tr>}</tbody></table>
-        {shown.length > rows && <p style={{ marginTop: 10 }}><button className="btn" onClick={() => setRows(rows + 100)}>Show 100 more ({shown.length - rows} left)</button></p>}
+            <tr key={e.id}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(e.ts, true)}</td><td>{actorLabel(e.actor, people)}</td>
+              <td>{recordHref(e) ? <Link to={recordHref(e)!}>{recordLabel(e)}</Link> : recordLabel(e)}</td>
+              <td><b>{actionLabel(e.action)}</b></td><td className="muted" style={{ maxWidth: 420 }}>{detailText(e.detail) || '—'}</td></tr>))}
+          {!shown.length && <tr><td colSpan={5} className="muted">{ev.length ? 'No events match your search or filters.' : 'No actions have been recorded yet.'}</td></tr>}</tbody></table>
+        {shown.length > rows && <p style={{ marginTop: 10 }}><button className="btn" onClick={() => setRows(rows + 100)}>Show next 100 events ({shown.length - rows} remaining)</button></p>}
       </div>
     </>
   )
@@ -296,30 +386,39 @@ function AuditLog() {
 
 function Notifications() {
   const { data: ns, error } = useApi('/notifications')
-  const { data: people } = useApi('/people')
+  const { data: people, error: peopleError } = useApi('/people')
   const [params] = useSearchParams()
   const focus = Number(params.get('notification')) || null
   const [f, setF] = useState<Record<string, string>>({})
   useEffect(() => {
     if (ns && focus) requestAnimationFrame(() => document.getElementById(`notification-${focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
   }, [ns, focus])
-  if (!ns || !people) return <Loading error={error} />
+  if (!ns || !people) return <Loading error={error || peopleError} />
   const name = (id: number | null) => people.find((p: any) => p.id === id)?.name || '—'
+  const delivered = ns.filter((n: any) => n.delivered).length
+  const notDelivered = ns.length - delivered
   const set = (k: string) => (v: string) => setF((x) => ({ ...x, [k]: v }))
-  const shown = ns.filter((n: any) => n.id === focus || (has(f.q || '', n.message, name(n.person_id), n.kind) && (!f.kind || n.kind === f.kind)
+  const shown = ns.filter((n: any) => n.id === focus || (has(f.q || '', n.message, name(n.person_id), n.kind, notificationLabel(n.kind)) && (!f.kind || n.kind === f.kind)
     && (!f.delivered || (f.delivered === 'yes') === n.delivered)))
   return (
     <>
-      <Controls q={f.q || ''} setQ={set('q')} shown={shown.length} total={ns.length} onClear={() => setF({})} selects={[
-        { label: 'Type', value: f.kind || '', set: set('kind'), options: uniq(ns.map((n: any) => n.kind)).map((k) => [k, k.replace(/_/g, ' ')] as [string, string]) },
-        { label: 'Delivered', value: f.delivered || '', set: set('delivered'), options: [['yes', 'Delivered'], ['no', 'Not delivered']] }]} />
+      <div className="card oversight-delivery-summary" role="group" aria-label="Notification delivery summary">
+        <div className="oversight-delivery-stat"><strong>{ns.length}</strong><span>Messages recorded</span></div>
+        <div className="oversight-delivery-stat"><strong>{delivered}</strong><span>Delivered</span></div>
+        <div className={`oversight-delivery-stat${notDelivered ? ' is-failed' : ''}`}><strong>{notDelivered}</strong><span>Not delivered</span></div>
+        <p className="muted">Delivery is simulated from the recipient’s account. These totals include self-test messages; the dashboard’s failed-notification count excludes them. “Delivered” does not mean the recipient opened or read the message.</p>
+      </div>
+      <Controls q={f.q || ''} setQ={set('q')} shown={shown.length} total={ns.length} onClear={() => setF({})}
+        searchLabel="Search notifications" searchPlaceholder="Search message, recipient, or type…" countLabel="messages" selects={[
+        { label: 'Notification type', value: f.kind || '', set: set('kind'), options: uniq(ns.map((n: any) => n.kind)).map((kind) => [kind, notificationLabel(kind)] as [string, string]) },
+        { label: 'Delivery status', value: f.delivered || '', set: set('delivered'), options: [['yes', 'Delivered'], ['no', 'Not delivered']] }]} />
       <div className="card" style={{ marginTop: 14 }}>
-        <table><thead><tr><th>When</th><th>To</th><th>Type</th><th>Message</th><th>Delivered</th></tr></thead><tbody>
+        <table className="oversight-notification-table"><thead><tr><th>When</th><th>Recipient</th><th>Notification type</th><th>Message</th><th>Delivery status</th></tr></thead><tbody>
           {shown.map((n: any) => (
-            <tr key={n.id} id={`notification-${n.id}`} className={n.id === focus ? 'hl' : ''}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(n.created_at, true)}</td><td>{name(n.person_id)}</td>
-              <td>{n.kind.replace(/_/g, ' ')}</td><td className="muted">{n.message}</td>
-              <td>{n.delivered ? <Badge kind="info">✓</Badge> : <Badge kind="over">✕ failed</Badge>}</td></tr>))}
-          {!shown.length && <tr><td colSpan={5} className="muted">No notifications match.</td></tr>}</tbody></table>
+            <tr key={n.id} id={`notification-${n.id}`} className={n.id === focus ? 'hl' : ''}><td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmt(n.created_at, true)}</td><td>{name(n.person_id) === '—' ? 'No named recipient' : name(n.person_id)}</td>
+              <td>{notificationLabel(n.kind)}</td><td className="muted">{n.message}</td>
+              <td><Badge kind={n.delivered ? 'ok' : 'over'}>{n.delivered ? 'Delivered' : 'Not delivered'}</Badge></td></tr>))}
+          {!shown.length && <tr><td colSpan={5} className="muted">{ns.length ? 'No messages match your search or filters.' : 'No notifications have been sent yet.'}</td></tr>}</tbody></table>
       </div>
     </>
   )

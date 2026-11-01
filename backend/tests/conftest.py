@@ -47,8 +47,8 @@ STRUTS = dict(cve="CVE-2017-5638", product="Apache Struts", affected_versions=["
 
 
 def sign_required(db, t):
-    """Collect every sign-off a task needs (the asset owner and Information Security, plus C2-C4), each from the
-    person the rule names. The asset owner's record agrees with the evidence."""
+    """Collect every sign-off a task needs (the system owner and Information Security, plus C2-C4), each from the
+    person the rule names. The system owner's record agrees with the evidence."""
     from app.services import closure
     ev = closure.current_evidence(db, t)
     for key in closure.missing_signoffs(t):

@@ -161,7 +161,7 @@ def test_scoped_absence_evidence_needs_independent_review(db, who):
     except PermissionError:
         pass
     closure.review_evidence(db, ev, who("rverma"), True)
-    # accepted evidence is not enough: the asset owner and Information Security must both sign off (§6.5)
+    # accepted evidence is not enough: the system owner and Information Security must both sign off (Â§6.5)
     assert claim_for(db, ob, "ACIS Dispute Portal").value == "cannot_determine" and t.status == "open"
     sign_required(db, t)
     assert claim_for(db, ob, "ACIS Dispute Portal").value == "does_not_apply"

@@ -11,7 +11,7 @@ const STATUS: Record<string, [string, string]> = {
 export function GuidanceText({ g }: { g: any }) {
   return (
     <div style={{ marginTop: 6 }}>
-      {g.text && <p style={{ fontSize: 13.5 }}>{g.text}</p>}
+      {g.text && g.text.split(/\n|(?<=[.!?])\s+(?=[A-Z])/).filter(Boolean).map((l: string, i: number) => <p key={i} style={{ fontSize: 13.5, margin: '0 0 4px' }}>{l}</p>)}
       {(g.citations || []).length > 0 && <details style={{ marginTop: 4 }}><summary className="faint" style={{ cursor: 'pointer' }}>{g.citations.length} citation{g.citations.length > 1 ? 's' : ''}</summary>
         {g.citations.map((c: any, i: number) => <blockquote key={i} style={{ margin: '6px 0', padding: '6px 10px', borderLeft: '3px solid var(--blue)', background: 'var(--blue-soft)', fontSize: 12.5 }}>
           <span className="faint">{c.source}</span><div>“{c.quote}”</div></blockquote>)}</details>}

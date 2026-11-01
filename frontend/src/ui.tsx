@@ -1,9 +1,28 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useId, useState } from 'react'
 import { ApiError } from './api'
 
 export const Badge = ({ kind = '', children }: { kind?: string; children: ReactNode }) => (
   <span className={`badge ${kind}`}>{children}</span>
 )
+
+export function InfoTip({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId()
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [clicked, setClicked] = useState(false)
+  const open = hovered || focused || clicked
+  return (
+    <span className="info-tip" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <button type="button" className="info-tip-trigger" aria-label={`About ${label}`} aria-describedby={id}
+        aria-expanded={open} aria-controls={id} onClick={() => setClicked((value) => !value)}
+        onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); setClicked(false) }}
+        onKeyDown={(event) => { if (event.key === 'Escape') { setClicked(false); setFocused(false); event.currentTarget.blur() } }}>
+        i
+      </button>
+      <span className={`info-tip-bubble${open ? ' open' : ''}`} id={id} role="tooltip">{children}</span>
+    </span>
+  )
+}
 
 const IMPACT: Record<string, string> = { High: 'imp-high', Medium: 'imp-med', Low: 'imp-low' }
 
@@ -12,10 +31,13 @@ export const ImpactBadge = ({ impact, short = false }: { impact: string; short?:
   <Badge kind={IMPACT[impact] || ''}>{impact}{short ? '' : ' impact'}</Badge>
 )
 
+// 'fixed_pending_review' -> 'Fixed pending review'; 'expired' reads as 'Lapsed' everywhere a claim is shown
+export const pretty = (s: string) => { const t = s === 'expired' ? 'lapsed' : s.replaceAll('_', ' '); return t.charAt(0).toUpperCase() + t.slice(1) }
+
 export const TaskStatusBadge = ({ status }: { status: string }) => (
   <Badge kind={status === 'closed' ? 'ok' : status === 'risk_accepted' ? 'info' :
     status === 'reopened' ? 'over' : status === 'fixed_pending_review' ? 'cd' : ''}>
-    {status.replaceAll('_', ' ')}
+    {pretty(status)}
   </Badge>
 )
 

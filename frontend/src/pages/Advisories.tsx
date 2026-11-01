@@ -60,10 +60,13 @@ export function AdvisoryList() {
   const [adding, setAdding] = useState<null | 'choose' | 'advisory' | 'document'>(null)
   const [rev, setRev] = useState<any>(null)
   const [q, setQ] = useState('')
+  const [status, setStatus] = useState('')
   const { run, error: aerr } = useAction()
   if (!rows || !obs || !sources) return <Loading error={error} />
   const items = buildItems(rows, obs, sources)
-  const shown = items.filter((i) => has(q, i.title, i.kind, i.rows.map((r: any) => `${r.scope} ${r.owner}`).join(' '), (i.clauses || []).map((c: Clause) => c.ob.title).join(' ')))
+  const statusOf = (i: any) => i.stage === 'review' ? 'review' : i.stage === 'done' ? 'done' : i.overdue ? 'overdue' : 'waiting'
+  const count = (k: string) => items.filter((i) => !k || statusOf(i) === k).length
+  const shown = items.filter((i) => (!status || statusOf(i) === status) && has(q, i.title, i.kind, i.rows.map((r: any) => `${r.scope} ${r.owner}`).join(' '), (i.clauses || []).map((c: Clause) => c.ob.title).join(' ')))
   const sign = (r: any) => run(async () => {
     if (r.task_id) await api.post(`/tasks/${r.task_id}/acknowledge`)
     else await api.post(`/obligations/${r.obligation_id}/signoff`, { department: r.department_key })
@@ -113,6 +116,10 @@ export function AdvisoryList() {
         <h2>All items</h2>
         <input style={{ width: 260 }} placeholder="Search items, systems, owners…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }} role="group" aria-label="Filter by status">
+        {([['', 'All'], ['overdue', 'Overdue'], ['waiting', 'Waiting'], ['review', 'Needs review'], ['done', 'Complete']] as const).map(([k, l]) => (
+          <button key={k} className={`btn sm${status === k ? ' primary' : ''}`} aria-pressed={status === k} onClick={() => setStatus(k)}>{l} ({count(k)})</button>))}
+      </div>
       <p className="faint" style={{ margin: '4px 0 10px' }}>Labels: <b>Applies</b> means act. <b>Cannot Determine</b> means we lack the data, so investigate. <b>Does Not Apply</b> means confirmed unaffected.</p>
 
       {shown.map((i) => (
@@ -140,7 +147,7 @@ export function AdvisoryList() {
                 <table><thead><tr><th>Department</th><th>Owner</th><th>Label</th><th>Sign-off</th><th></th></tr></thead><tbody>{c.rows.map(cell)}</tbody></table>)}
             </div>))}
         </details>))}
-      {!shown.length && <div className="card"><p className="muted">{items.length ? 'Nothing matches.' : 'Nothing here yet. Click “Add something new” to bring in a security advisory or a changed document.'}</p></div>}
+      {!shown.length && <div className="card"><p className="muted">{items.length ? 'Nothing matches the current filter.' : 'Nothing here yet. Click “Add something new” to bring in a security advisory or a changed document.'}</p></div>}
       <p className="faint" style={{ marginTop: 8 }}>A sign-off is recorded for the named owner. The audit log notes that Risk & Compliance entered it on their behalf.</p>
 
       {adding === 'choose' && <AddNewModal onClose={() => setAdding(null)} onPick={setAdding} />}
@@ -222,7 +229,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
     })
   }
   return (
-    <Modal title="Ingest advisory" sub="Fetch real data from NVD and CISA KEV, or type it in. It is matched against every asset at once. If an approved feed already delivered this CVE, it is merged into the same obligation." onClose={onClose}>
+    <Modal title="Add security advisory" sub="Fetch real data from NVD and CISA KEV, or type it in. It is matched against every system at once. If an approved feed already delivered this CVE, it is merged into the same obligation." onClose={onClose}>
       <label>CVE</label>
       <div style={{ display: 'flex', gap: 8 }}><input value={f.cve} onChange={(e) => set('cve', e.target.value)} />
         <button className="btn" disabled={busy} onClick={fetchNvd}>Fetch from NVD</button></div>
@@ -238,7 +245,7 @@ function IngestModal({ onClose }: { onClose: () => void }) {
       <label>Fixed version</label><input value={f.fixed} onChange={(e) => set('fixed', e.target.value)} />
       {error && <p className="err">{error}</p>}
       <div className="actions"><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={busy} onClick={submit}>Ingest and match</button></div>
+        <button className="btn primary" disabled={busy} onClick={submit}>Add and match</button></div>
     </Modal>
   )
 }
@@ -355,12 +362,12 @@ export function AdvisoryDetail() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="sec"><div><h2>Applicability across the estate</h2>
+        <div className="sec"><div><h2>Applicability across all systems</h2>
           <p className="muted">Missing or stale data becomes Cannot Determine — never Does Not Apply.</p></div>
           <div style={{ display: 'flex', gap: 6 }}>
             <Badge kind="lbl-applies">{est.counts.applies} Applies</Badge><Badge kind="lbl-cd">{est.counts.cannot_determine} Cannot Determine</Badge><Badge kind="lbl-dna">{est.counts.does_not_apply} Does Not Apply</Badge></div></div>
         <table>
-          <thead><tr><th>Asset</th><th>Owner</th><th>Impact</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
+          <thead><tr><th>System</th><th>Owner</th><th>Impact</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
           <tbody>{est.rows.map((r: any) => (
             <tr key={r.asset_id} className={r.state === 'cannot_determine' ? 'hl' : ''}>
               <td><b>{r.asset}</b><div className="faint">{r.tags}</div></td>
@@ -391,12 +398,13 @@ export function AdvisoryDetail() {
       </div>
 
       <div className="gate">
-        <div><div className="mono" style={{ color: '#98a0ae', fontSize: 11 }}>OBLIGATION OBL-{String(o.id).padStart(4, '0')} · CLOSURE GATE</div>
-          <h2 style={{ fontSize: 19, margin: '4px 0' }}>{o.status === 'closed' ? 'Obligation closed' : `${g.approved} of ${g.total} assets have an approved disposition`}</h2>
-          <p style={{ color: '#c9ced8' }}>Closes only when every affected asset is remediated or under approved risk acceptance, and none remains Cannot Determine.</p>
-          {o.closure_blockers?.length > 0 && <p style={{ color: '#98a0ae', fontSize: 12, marginTop: 6 }}>Blocking: {o.closure_blockers.join(' · ')}</p>}</div>
+        <div><div className="mono" style={{ color: '#98a0ae', fontSize: 11 }}>OBL-{String(o.id).padStart(4, '0')} · WHAT IS LEFT TO CLOSE THIS</div>
+          <h2 style={{ fontSize: 19, margin: '4px 0' }}>{o.status === 'closed' ? 'Obligation closed' : `${g.approved} of ${g.total} systems are resolved`}</h2>
+          <p style={{ color: '#c9ced8' }}>This advisory closes when every affected system is either fixed or has an approved risk acceptance, and none is still Cannot Determine.</p>
+          {o.closure_blockers?.length > 0 && <div style={{ color: '#c9ced8', fontSize: 12.5, marginTop: 8 }}>Still needed before this closes:
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{o.closure_blockers.map((b: string) => <li key={b}>{b}</li>)}</ul></div>}</div>
         <div><div className="seg"><i style={{ width: pct(g.approved), background: '#8ea4f0' }} /><i style={{ width: pct(g.in_review), background: '#f0b48a' }} /><i style={{ width: pct(g.cannot_determine), background: '#a58be0' }} /></div>
-          <div className="seglabels"><span>{g.approved} approved</span><span>{g.in_review} in review</span><span>{g.cannot_determine} Cannot Determine</span></div></div>
+          <div className="seglabels"><span>{g.approved} resolved</span><span>{g.in_review} in review</span><span>{g.cannot_determine} Cannot Determine</span></div></div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -411,15 +419,32 @@ export function AdvisoryDetail() {
       </div>
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Guidance sent to each system</h2>
-        <p className="muted">Written for each owner from their own component record. Released at once (fast path, C1); Information Security checks it alongside, and a held-back draft goes to Compliance (A4).</p>
-        <table style={{ marginTop: 8 }}><thead><tr><th>System · owner</th><th>Guidance</th><th>Checked alongside</th></tr></thead><tbody>
-          {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded').map((x: any) => (
-            <tr key={x.id}><td><b>{x.asset}</b><div className="faint">{x.recipient || 'no owner'}</div></td>
-              <td style={{ maxWidth: 460 }}>{x.status === 'released' ? <GuidanceText g={x} /> : <><Badge kind="over">Held back</Badge> <span className="faint">{x.reason}</span>
-                <div><button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => setWriting(x)}>Write guidance</button></div></>}</td>
-              <td>{x.consult ? (x.consulted_at ? <>{x.consult}<div className="faint">{fmt(x.consulted_at)}</div></>
-                : <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/consult`); refreshAll() })}>Mark checked as {x.consult}</button>) : <span className="faint">—</span>}</td></tr>))}
-          {!o.guidance.some((x: any) => x.asset) && <tr><td colSpan={3} className="muted">No system needs action for this advisory.</td></tr>}</tbody></table>
+        <p className="muted">Instructions for each system owner, written from that system's own component record. They are sent straight away; Information Security then double-checks them. If a draft could not be written reliably it is held back for a person to write.</p>
+        {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded').map((x: any) => {
+          const lines: string[] = (x.text || '').replace(/^For the [^:]*:\s*/, '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/)
+            .map((l: string) => l.replace(/^(What we know|The fix|What you need to do):\s*/, '').trim()).filter(Boolean)
+          const todo = lines.filter((l) => /\b(must|scan|patch|submit|upgrade|provide)\b/i.test(l))
+          const why = lines.filter((l) => !todo.includes(l))
+          return (
+            <div key={x.id} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '12px 14px', marginTop: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div><b>{x.asset}</b> <span className="faint">· owner {x.recipient || 'none'}</span></div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {x.consult && (x.consulted_at ? <Badge kind="info">✓ Checked by {x.consult} · {fmt(x.consulted_at)}</Badge>
+                    : <><span className="faint">Not yet checked by {x.consult}</span>
+                      <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/consult`); refreshAll() })}>Mark as checked</button></>)}</div></div>
+              {x.status === 'released' ? <>
+                {why.length > 0 && <div style={{ marginTop: 10 }}><div className="faint" style={{ fontWeight: 600 }}>WHERE THIS STANDS</div>
+                  {why.map((l, i) => <p key={i} style={{ margin: '2px 0' }}>{l}</p>)}</div>}
+                {todo.length > 0 && <div style={{ marginTop: 10 }}><div className="faint" style={{ fontWeight: 600 }}>WHAT THE OWNER MUST DO</div>
+                  <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>{todo.map((l, i) => <li key={i}>{l}</li>)}</ul></div>}
+                {(x.citations || []).length > 0 && <details style={{ marginTop: 10 }}>
+                  <summary className="faint" style={{ cursor: 'pointer' }}>Based on {x.citations.length} record{x.citations.length > 1 ? 's' : ''}</summary>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }} className="faint">{x.citations.map((c: any, i: number) => <li key={i}>{c.source}</li>)}</ul></details>}</>
+              : <div style={{ marginTop: 10 }}><Badge kind="over">Held back</Badge> <span className="faint">{x.reason}</span>
+                  <div><button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => setWriting(x)}>Write guidance</button></div></div>}
+            </div>)})}
+        {!o.guidance.some((x: any) => x.asset) && <p className="muted" style={{ marginTop: 8 }}>No system needs action for this advisory.</p>}
       </div>
       {writing && <WriteGuidanceModal g={writing} onClose={() => setWriting(null)} />}
       {hist && <Modal title="Source & version history" onClose={() => setHist(false)}>
