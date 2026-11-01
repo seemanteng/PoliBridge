@@ -37,7 +37,6 @@ function FixSteps({ t }: { t: any }) {
       <p className="faint" style={{ marginTop: 10 }}>Deadlines: acknowledge {t.ack.note} · {t.interim.due_h ? `interim control ${t.interim.note} · ` : ''}fix by {t.disposition.due}.</p>
       {g && g.status === 'released' && <details style={{ marginTop: 8 }}><summary className="faint" style={{ cursor: 'pointer' }}>Where this guidance comes from</summary><GuidanceText g={g} /></details>}
       {g && g.status !== 'released' && <p className="muted" style={{ marginTop: 6 }}>Written guidance held back for Compliance: {g.reason}</p>}
-      {g?.consult && <p className="faint" style={{ marginTop: 6 }}>{g.consulted_at ? `Checked by ${g.consult}` : `${g.consult} is checking it alongside`}</p>}
     </div>
   )
 }

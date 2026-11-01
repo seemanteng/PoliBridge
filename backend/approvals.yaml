@@ -3,9 +3,11 @@
 # approves what; the rules read it, nothing hard-codes it. (Report §6.4, Appendix C rules A4 and C1, Appendix D.)
 
 advisory:
-  release: immediate        # C1 fast path: the system owner gets the fix advice at once
-  consult: ciso             # Information Security checks it alongside, not as a gate
-  withheld_to: compliance   # A4: a held-back draft goes to Compliance for interpretation
+  release: immediate        # C1 fast path: the system owner gets the instructions at once
+  instructions: template    # §7.2: no AI on security alerts; filled in from the alert and the system's record
+  impact_review: ciso       # C1: Security confirms each High-impact rating in parallel, not as a gate
+  impact_concern_to: risk_owner  # C6: a questioned rating goes to the accountable risk owner to decide
+  withheld_to: compliance   # A4: an instruction that fails the quote check goes to Compliance
 
 # Clause guidance is approved by the topic's approver before release. First topic whose keywords appear in the
 # clause wins; otherwise default_topic applies.
@@ -18,7 +20,6 @@ clause_topics:
     label: Security clause
     keywords: [encrypt, multi-factor, access control, vulnerab, penetration, intrusion, authenticat, patch, monitor, incident]
     approver: compliance
-    consult: ciso           # checks the security advice is technically right
   governance:
     label: Governance clause
     keywords: [board, qualified individual, governing body, risk assessment, written, program]

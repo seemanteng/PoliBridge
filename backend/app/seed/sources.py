@@ -194,13 +194,35 @@ def upgrade(db) -> list[str]:
     if not db.scalar(select(FeedItem.id).limit(1)):
         _queue_feed(db, made, now)
         done.append("queued the demo feed alerts")
-    from ..services import rag  # per-system guidance for advisory tasks created before it was drafted
-    for t in db.scalars(select(Task).where(Task.is_test == False, Task.status.in_(("open", "reopened", "fixed_pending_review")))):  # noqa: E712
+    from ..models import Finding
+    from ..services import approvals, rag
+    open_states = ("open", "reopened", "fixed_pending_review")
+    # security alert instructions come from the fixed template, not the AI (§7.2): replace any written another way
+    redone = 0
+    for g in list(db.scalars(select(Guidance).join(Obligation, Obligation.id == Guidance.obligation_id).where(
+            Obligation.kind == "advisory", Obligation.is_test == False,  # noqa: E712
+            Guidance.status.in_(("released", "withheld", "draft"))))):
+        if (g.engine or "").startswith("template"):
+            continue
+        g.status = "superseded"
+        redone += 1
+        if g.asset_id is None:
+            rag.generate_guidance(db, db.get(Obligation, g.obligation_id), g.role)
+    if redone:
+        done.append(f"rewrote {redone} security alert instructions from the template")
+    for t in db.scalars(select(Task).where(Task.is_test == False, Task.status.in_(open_states))):  # noqa: E712
         ob = db.get(Obligation, t.obligation_id)
-        if ob.advisory_id and not db.scalar(select(Guidance.id).where(Guidance.obligation_id == ob.id,
-                                                                      Guidance.asset_id == t.asset_id)):
+        if ob.advisory_id and not db.scalar(select(Guidance.id).where(
+                Guidance.obligation_id == ob.id, Guidance.asset_id == t.asset_id, Guidance.status != "superseded")):
             rag.guidance_for_task(db, ob, t)
-            done.append(f"drafted guidance for task {t.id}")
+    for ob in db.scalars(select(Obligation).where(Obligation.kind == "advisory", Obligation.is_test == False)):  # noqa: E712
+        if not db.scalar(select(Guidance.id).where(Guidance.obligation_id == ob.id, Guidance.status == "withheld")):
+            for f in db.scalars(select(Finding).where(Finding.kind == "guidance_withheld", Finding.status == "open",
+                                                      Finding.subject == f"Guidance withheld: {ob.title}")):
+                f.status = "resolved"
+        if ob.impact == "High" and not ob.security_review:
+            approvals.request_security_review(db, ob)
+            done.append(f"asked Security to confirm the High rating of {ob.title}")
     db.flush()
     return done
 

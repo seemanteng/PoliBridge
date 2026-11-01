@@ -28,7 +28,7 @@ def init_db(eng=None):
     added = {"advisory": {"description": "TEXT", "received_at": "DATETIME", "ingested_at": "DATETIME",
                           "sources": "JSON", "conflict": "TEXT", "exploited_at": "DATETIME"},
              "obligation": {"previous_quotation": "TEXT", "departments": "JSON", "supersedes_id": "INTEGER",
-                            "superseded_reason": "TEXT", "source_version_id": "INTEGER"},
+                            "superseded_reason": "TEXT", "source_version_id": "INTEGER", "security_review": "JSON"},
              "person": {"email": "TEXT"},
              "asset": {"third_party_critical": "BOOLEAN DEFAULT 0"},
              "source": {"authority": "TEXT", "jurisdiction": "TEXT", "intake": "TEXT DEFAULT 'manual'",
@@ -42,9 +42,10 @@ def init_db(eng=None):
                                 "effective_date": "TEXT", "uploaded_by": "TEXT", "summary": "JSON"},
              "claim": {"source_id": "INTEGER"},
              "task": {"reviewer_signoffs": "JSON DEFAULT '{}'", "signoff_dispute": "JSON",
-                      "emergency": "BOOLEAN DEFAULT 0", "deadline_basis": "JSON"},             "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
-                          "topic": "TEXT", "approver_id": "INTEGER", "approved_at": "DATETIME", "consult_id": "INTEGER",
-                          "consulted_at": "DATETIME", "human_authored": "BOOLEAN DEFAULT 0"},
+                      "emergency": "BOOLEAN DEFAULT 0", "deadline_basis": "JSON"},
+             "guidance": {"engine": "TEXT", "department": "TEXT", "asset_id": "INTEGER", "recipient_id": "INTEGER",
+                          "topic": "TEXT", "approver_id": "INTEGER", "approved_at": "DATETIME",
+                          "human_authored": "BOOLEAN DEFAULT 0"},
              "canary_run": {"feed": "TEXT", "stage": "TEXT"}}
     with eng.begin() as c:
         for table, cols_to_add in added.items():

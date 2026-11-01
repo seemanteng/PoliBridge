@@ -28,6 +28,8 @@ export default function FeedDetail() {
   const [params] = useSearchParams()
   const sid = params.get('source')
   const { data: d, error } = useApi(`/feeds/${sid}/dashboard`)
+  const { data: sources } = useApi('/sources')
+  const feedId: Record<string, number> = Object.fromEntries((sources || []).map((x: any) => [x.name, x.id]))
   const { run, error: aerr, busy } = useAction()
   const [note, setNote] = useState('')
   if (!d) return <Loading error={error} />
@@ -68,7 +70,9 @@ export default function FeedDetail() {
           <div key={a.obligation_id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '10px 0', borderTop: '1px solid var(--line)' }}>
             <div><Link to={`/acknowledgements/${a.obligation_id}`}><b className="mono">{a.cve}</b></Link> · {a.product}
               {a.new && <> <Badge kind="info">New</Badge></>} {a.impact && <ImpactBadge impact={a.impact} short />}
-              <div className="faint">{a.cvss == null ? 'no severity score yet' : `CVSS ${a.cvss}`}{a.kev ? ' · actively exploited' : ''} · received {fmt(a.received_at)}{a.also_from.length > 0 && ` · also reported by ${a.also_from.join(', ')}`}</div></div>
+              <div className="faint">{a.cvss == null ? 'no severity score yet' : `CVSS ${a.cvss}`}{a.kev ? ' · actively exploited' : ''} · received {fmt(a.received_at)}</div>
+              {a.also_from.length > 0 && <div style={{ marginTop: 4 }}><Badge kind="ok">Same alert also reported by {a.also_from.map((n: string, i: number) => <span key={n}>{i > 0 && ', '}
+                {feedId[n] ? <Link to={`/documents?tab=feed&source=${feedId[n]}`}>{n}</Link> : n}</span>)}</Badge> <span className="faint">combined into one alert, so it only needs handling once</span></div>}</div>
             <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
               <div><Badge kind="lbl-applies">{a.counts.applies} affected</Badge> <Badge kind="lbl-cd">{a.counts.cannot_determine} can't tell</Badge> <Badge kind="lbl-dna">{a.counts.does_not_apply} not affected</Badge></div>
               {a.awaiting_ack > 0 && <div className="faint red" style={{ marginTop: 4 }}>{a.awaiting_ack} owner{a.awaiting_ack > 1 ? 's' : ''} still to acknowledge</div>}</div>
@@ -82,7 +86,8 @@ export default function FeedDetail() {
         <div style={{ overflowX: 'auto', marginTop: 8 }}>
           <table><thead><tr><th style={{ minWidth: 240 }}>System</th>
             {d.alerts.map((a: any) => <th key={a.obligation_id} style={{ minWidth: 150 }}><Link to={`/acknowledgements/${a.obligation_id}`} className="mono">{a.cve}</Link>
-              <div className="faint">{a.product}{a.new ? ' · new' : ''}</div></th>)}
+              <div className="faint">{a.product}{a.new ? ' · new' : ''}</div>
+              {a.also_from.length > 0 && <div className="faint" title={`Also reported by ${a.also_from.join(', ')}`}>also in {a.also_from.join(', ')}</div>}</th>)}
             <th>Open alerts</th></tr></thead>
             <tbody>{d.systems.map((sys: any) => (
               <tr key={sys.id} className={hit(sys) ? 'hl' : ''}>

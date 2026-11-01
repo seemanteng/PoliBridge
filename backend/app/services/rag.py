@@ -1,6 +1,7 @@
-"""RAG guidance. Retrieval is over the source clause, internal policies and asset context. Grounding is verified
-deterministically *after* generation, so a model that invents a citation is withheld (A4). RAG never confirms
-applicability, accepts risk or authorises closure; it only produces draft text, which approvals.yaml routes."""
+"""Guidance. For regulatory and policy clauses, RAG drafts it from the clause and internal policies (§6.4). For
+security alerts no model is used (§7.2): a fixed template is filled in from the alert and the system's own record.
+Either way every quote is verified deterministically afterwards, so a draft that misquotes a source is withheld (A4).
+Guidance never confirms applicability, accepts risk or authorises closure; it is only text, routed by approvals.yaml."""
 import json
 import os
 import re
@@ -8,7 +9,6 @@ import re
 from sqlalchemy import select
 
 from ..clock import clock
-from ..config import APPROVALS
 from ..models import Obligation, Guidance, SourceVersion, Source, Asset, Advisory, Person, Task
 from ..rules import versions
 from . import audit, approvals
@@ -76,13 +76,26 @@ def _conflict(passages: list[dict]) -> str | None:
     return None
 
 
+def _comparable(s: str) -> str:
+    """Case, spacing and quote marks don't change what a sentence says, so they are ignored when matching quotes."""
+    s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _quote_found(quote: str, passages: list[dict]) -> bool:
+    """Every word of the quote must appear, in order and unchanged, in one passage. Only the punctuation at its ends
+    may differ, because quoting part of a sentence often closes it with a full stop the source doesn't have there."""
+    q = _comparable(quote).strip(" .,;:!?\"'…").removeprefix("...").removesuffix("...").strip(" .,;:\"'")
+    return bool(q) and any(q in _comparable(p["text"]) for p in passages)
+
+
 def verify_grounding(text: str, citations: list[dict], passages: list[dict]) -> tuple[bool, str | None]:
     if not citations:
         return False, "no citations"
     for c in citations:
         quote = c.get("quote", "")
-        if not any(quote and quote.lower() in p["text"].lower() for p in passages):
-            return False, f"citation not found verbatim in sources: '{quote[:60]}'"
+        if not _quote_found(quote, passages):
+            return False, f"citation not found word for word in sources: '{quote[:60]}'"
     cited = set().union(*[_tokens(c["quote"]) for c in citations])
     overlap = len(_tokens(text) & cited) / max(1, len(_tokens(text)))
     if overlap < MIN_OVERLAP:
@@ -117,6 +130,9 @@ def _llm(ob: Obligation, role: str, passages: list[dict]) -> dict:
     prompt = (
         "Draft short guidance for the given role using ONLY the numbered passages. Return JSON "
         '{"text": str, "citations": [{"source": str, "quote": <exact substring of a passage>}]}. '
+        "Each quote is checked by a program against the passages: copy it character for character. You may quote "
+        "part of a sentence, but never change, add or drop a word inside it. Cite only the two to four passages the "
+        "guidance actually relies on, and write the guidance mostly in their words. "
         "Do not decide applicability, accept risk or declare anything closed.\n"
         f"Role: {role}\nObligation: {ob.title}\nPassages:\n" +
         "\n".join(f"[{i}] ({p['id']}) {p['text']}" for i, p in enumerate(passages, 1)))
@@ -132,14 +148,16 @@ def _draft(db, ob: Obligation, role: str, asset: Asset | None = None) -> dict:
     if not passages:
         return {"text": "", "citations": [], "grounded": False, "reason": "no source passages retrieved", "engine": None}
     conflict = _conflict(passages)
-    engine = "stub"
+    engine = "template"
     try:
-        if os.getenv("OPENAI_API_KEY"):
+        if ob.kind == "advisory":  # §7.2: the model is confined to regulatory intake; alerts use the fixed template
+            draft = _stub(ob, role, passages, asset)
+        elif os.getenv("OPENAI_API_KEY"):
             draft, engine = _llm(ob, role, passages), "openai"
         else:
             draft = _stub(ob, role, passages, asset)
     except Exception as e:  # network/model failure -> deterministic fallback, noted
-        draft, engine = _stub(ob, role, passages, asset), f"stub (llm failed: {type(e).__name__})"
+        draft, engine = _stub(ob, role, passages, asset), f"template (AI failed: {type(e).__name__})"
     ok, why = verify_grounding(draft.get("text", ""), draft.get("citations", []), passages)
     if conflict:
         ok, why = False, conflict
@@ -167,17 +185,14 @@ def generate_guidance(db, ob: Obligation, role: str) -> Guidance:
 
 
 def guidance_for_task(db, ob: Obligation, task: Task) -> Guidance:
-    """C1 fast path: the system owner gets advice about their own system at once; Information Security checks it
-    alongside. A held-back draft goes to Compliance instead (A4)."""
+    """C1 fast path: the system owner gets instructions about their own system at once, filled in from the alert and
+    the system's record (no AI, §7.2). One that fails the quote check goes to Compliance instead (A4)."""
     asset = db.get(Asset, task.asset_id)
     recipient = db.get(Person, task.owner_id) if task.owner_id else None
     d = _draft(db, ob, "system owner", asset)
-    consult = approvals.holder(db, APPROVALS["advisory"]["consult"])
-    if consult and recipient and consult.id == recipient.id:
-        consult = None
     g = Guidance(obligation_id=ob.id, role="system owner", text=d["text"], citations=d["citations"],
                  grounded=d["grounded"], reason=d["reason"], engine=d["engine"], asset_id=asset.id,
-                 recipient_id=recipient.id if recipient else None, consult_id=consult.id if consult and d["grounded"] else None,
+                 recipient_id=recipient.id if recipient else None,
                  status="released" if d["grounded"] else "withheld", created_at=clock.now())
     db.add(g)
     db.flush()
@@ -190,12 +205,11 @@ def guidance_for_task(db, ob: Obligation, task: Task) -> Guidance:
 def guidance_for_department(db, ob: Obligation, department: str, head: Person | None) -> Guidance:
     """Clause guidance for one department head. It waits for the approver approvals.yaml names for the clause's
     topic; the approver is never the recipient."""
-    topic, approver, consult = approvals.route_clause(db, ob, head)
+    topic, approver = approvals.route_clause(db, ob, head)
     d = _draft(db, ob, f"{department}")
     g = Guidance(obligation_id=ob.id, role=department, department=department, text=d["text"], citations=d["citations"],
                  grounded=d["grounded"], reason=d["reason"], engine=d["engine"], topic=topic,
                  recipient_id=head.id if head else None, approver_id=approver.id if approver else None,
-                 consult_id=consult.id if consult else None,
                  status="pending_approval" if d["grounded"] else "withheld", created_at=clock.now())
     db.add(g)
     db.flush()
@@ -248,3 +262,39 @@ def write_guidance(db, ob: Obligation, author: Person, *, text: str, citations: 
 
 def passages_for(db, ob: Obligation, asset_id: int | None = None) -> list[dict]:
     return _passages(db, ob, db.get(Asset, asset_id) if asset_id else None)
+
+
+def redraft(db, g: Guidance) -> Guidance:
+    """Ask for a fresh draft of held-back or rejected guidance, for the same person and the same reason. The old
+    draft is kept as superseded. If the new one passes, the finding that flagged it to Compliance is closed once
+    nothing else for that alert or clause is still held back."""
+    if g.status not in ("withheld", "rejected"):
+        raise ValueError("only held-back or rejected guidance can be drafted again")
+    ob = db.get(Obligation, g.obligation_id)
+    if ob.status == "superseded":
+        raise ValueError(f"{ob.title} has been superseded; its guidance is no longer needed")
+    t = head = None
+    if g.asset_id:
+        t = db.scalar(select(Task).where(Task.obligation_id == ob.id, Task.asset_id == g.asset_id,
+                                         Task.status.in_(("open", "reopened", "fixed_pending_review"))).order_by(Task.id.desc()))
+        if t is None:
+            raise ValueError("this system no longer has an open task for the alert")
+    elif g.department:
+        row = next((d for d in ob.departments or [] if d["department"] == g.department), {})
+        head = db.scalar(select(Person).where(Person.name == row.get("owner"))) if row.get("owner") else None
+    g.status = "superseded"
+    new = (guidance_for_task(db, ob, t) if t else guidance_for_department(db, ob, g.department, head) if g.department
+           else generate_guidance(db, ob, g.role))
+    audit.log(db, "system", "guidance", new.id, "redrafted", replaces=g.id, status=new.status)
+    if new.status != "withheld":
+        still = select(Guidance.id).where(Guidance.obligation_id == ob.id, Guidance.status == "withheld")
+        still = still.where(Guidance.department == g.department) if g.department else still.where(
+            Guidance.department.is_(None), Guidance.asset_id.is_not(None))
+        if db.scalar(still) is None:
+            from ..models import Finding
+            subject = f"Guidance withheld: {ob.title}" + (f" · {g.department}" if g.department else "")
+            for f in db.scalars(select(Finding).where(Finding.kind == "guidance_withheld", Finding.subject == subject,
+                                                      Finding.status == "open")):
+                f.status = "resolved"
+                audit.log(db, "system", "finding", f.id, "resolved", because="guidance redrafted and passed the quote check")
+    return new

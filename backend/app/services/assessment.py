@@ -53,6 +53,8 @@ def assess_obligation(db, obligation: Obligation, actor="system") -> list[Claim]
     tasks = db.scalars(select(Task).where(Task.obligation_id == obligation.id))
     levels = [t.impact for t in tasks]
     obligation.impact = max(levels, key=RANK.get) if levels else None
+    from .approvals import request_security_review
+    request_security_review(db, obligation)  # C1: Security confirms a High rating while the owners already work
     return claims
 
 

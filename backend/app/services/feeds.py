@@ -217,13 +217,21 @@ def summary(db, src: Source) -> dict:
     """One line for the Sources list: how many alerts, how many new, how many systems they touch."""
     now = clock.now()
     advs = _advisories_from(db, src)
-    systems, waiting = set(), 0
-    for adv, _ in advs:
+    systems, waiting, cves = set(), 0, []
+    for adv, at in advs:
         ob = db.scalar(select(Obligation).where(Obligation.advisory_id == adv.id))
+        affected = 0
         for t in db.scalars(select(Task).where(Task.obligation_id == ob.id, Task.status.in_(OPEN_STATES))):
             systems.add(t.asset_id)
             waiting += t.acknowledged_at is None
-    return {"alerts": len(advs), "new": sum(now - at < timedelta(hours=NEW_HOURS) for _, at in advs),
+            affected += 1
+        # each alert names every feed that reported it, so a CVE sent by two feeds can be shown as one alert
+        cves.append({"obligation_id": ob.id, "cve": adv.cve, "product": adv.product, "impact": ob.impact,
+                     "received_at": at.isoformat(), "new": now - at < timedelta(hours=NEW_HOURS),
+                     "systems_affected": affected, "conflict": adv.conflict,
+                     "reported_by": [{"source": e["source"], "received_at": e["received_at"]} for e in adv.sources or []]
+                     or [{"source": src.name, "received_at": at.isoformat()}]})
+    return {"alerts": len(advs), "new": sum(now - at < timedelta(hours=NEW_HOURS) for _, at in advs), "cves": cves,
             "systems_affected": len(systems), "awaiting_ack": waiting,
             "queued": db.scalar(select(func.count(FeedItem.id)).where(FeedItem.source_id == src.id,
                                                                       FeedItem.status == "waiting",

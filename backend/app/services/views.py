@@ -423,8 +423,7 @@ def task_detail(db, t: M.Task) -> dict:
                      for e in db.scalars(select(M.Evidence).where(M.Evidence.task_id == t.id))],
         "signoffs": closure.signoff_view(db, t),
         "guidance": [{"id": g.id, "status": g.status, "text": g.text, "citations": g.citations, "reason": g.reason,
-                      "engine": g.engine, "recipient": _name(db, g.recipient_id), "consult": _name(db, g.consult_id),
-                      "consulted_at": g.consulted_at.isoformat() if g.consulted_at else None}
+                      "engine": g.engine, "recipient": _name(db, g.recipient_id)}
                      for g in db.scalars(select(M.Guidance).where(M.Guidance.obligation_id == ob.id,
                                                                   M.Guidance.asset_id == a.id).order_by(M.Guidance.id.desc()))],
         "can_reject": t.status in OPEN_STATES,

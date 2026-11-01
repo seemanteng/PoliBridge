@@ -87,6 +87,10 @@ def test_same_cve_from_two_sources_is_one_obligation(db, apache):
     assert [s["source"] for s in adv.sources] == ["Apache bulletins", "CISA/NVD"]
     assert adv.cvss == 10.0 and adv.kev and adv.conflict is None  # same versions, written differently
     assert db.scalar(select(Advisory.id).where(Advisory.cve == "CVE-2017-5638").offset(1)) is None
+    # both feeds' summaries list it as the same alert, naming each feed that reported it
+    a, n = feeds.summary(db, apache)["cves"], feeds.summary(db, src(db, "CISA/NVD"))["cves"]
+    assert a[0]["obligation_id"] == n[0]["obligation_id"] == ob.id
+    assert [r["source"] for r in a[0]["reported_by"]] == ["Apache bulletins", "CISA/NVD"]
     assert len(db.scalars(select(Obligation).where(Obligation.kind == "advisory")).all()) == 1
 
 
@@ -226,8 +230,7 @@ def test_clause_guidance_waits_for_the_topic_approver(db, who, units):
                                                                      Guidance.department.is_not(None)))}
     g = next(x for d, x in gs.items() if d != "Information Security")
     assert g.status == "pending_approval" and g.topic == "security"
-    assert db.get(Person, g.approver_id).directory_id == "pnair" and db.get(Person, g.consult_id).directory_id == "crhodes"
-    assert gs["Information Security"].consult_id is None  # the CISO cannot check guidance addressed to them
+    assert db.get(Person, g.approver_id).directory_id == "pnair"
     with pytest.raises(PermissionError):
         approvals.approve_guidance(db, g, who("lbrandt"))  # not the routed approver
     approvals.approve_guidance(db, g, who("pnair"))
@@ -257,10 +260,12 @@ def test_withheld_guidance_goes_to_compliance_and_can_be_written_by_hand(db, who
     assert w.status == "released" and w.human_authored and g.status == "superseded"
 
 
-def test_advisory_guidance_is_per_system_and_released_at_once(db):
+def test_advisory_instructions_are_per_system_from_the_template_not_the_ai(db, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "set")  # even with a model configured, alerts don't use it (§7.2)
+    monkeypatch.setattr(rag, "_llm", lambda *a: pytest.fail("the model must not be called for a security alert"))
     ob = intake.ingest_advisory(db, **STRUTS)
     gs = db.scalars(select(Guidance).where(Guidance.obligation_id == ob.id, Guidance.asset_id.is_not(None))).all()
-    assert gs and all(g.status == "released" and g.consult_id for g in gs)
+    assert gs and all(g.status == "released" and g.engine == "template" for g in gs)
     portal = next(g for g in gs if "Credit Report Portal" in g.text)
     assert "2.3.31" in portal.text and "/opt/portal/**" in portal.text  # its own component record and evidence scope
 
@@ -396,3 +401,41 @@ def test_upgrade_fills_an_old_database_without_overwriting_it(db, who):
     assert s.scalar(select(FeedItem.id)) and len(s.scalars(select(Obligation).where(Obligation.source_id == old.id)).all()) == 2
     assert upgrade(s) == []  # nothing left to do the second time
     s.close()
+
+
+def test_quote_check_ignores_end_punctuation_but_not_words():
+    passages = [{"id": "policy", "text": "Owners must confirm their systems and software components at least every six "
+                                         "months, and when they change role or leave."}]
+    ok = lambda q: rag.verify_grounding(q, [{"source": "policy", "quote": q}], passages)[0]  # noqa: E731
+    assert ok("Owners must confirm their systems and software components at least every six months.")  # shortened
+    assert ok("“owners must confirm  their systems”")  # case, spacing and quote marks
+    assert not ok("Owners must confirm their systems every six months")  # words dropped from the middle
+    assert not ok("Owners must confirm their systems and software components at least every twelve months")
+
+
+def test_held_back_guidance_can_be_drafted_again(db, who, units, monkeypatch):
+    ob = _approve_clause(db, who, "§9.9 Patch within 72 hours of an advisory.")  # conflicts with the 48-hour policy
+    g = db.scalar(select(Guidance).where(Guidance.obligation_id == ob.id, Guidance.department.is_not(None)))
+    assert g.status == "withheld" and db.scalar(select(Finding).where(Finding.kind == "guidance_withheld"))
+    monkeypatch.setattr(rag, "_conflict", lambda passages: None)  # as if the sources had been reconciled
+    new = rag.redraft(db, g)
+    assert g.status == "superseded" and new.status == "pending_approval" and new.department == g.department
+    with pytest.raises(ValueError):
+        rag.redraft(db, new)  # only held-back or rejected drafts
+
+
+def test_security_confirms_a_high_rating_in_parallel(db, who):
+    ob = intake.ingest_advisory(db, **STRUTS)
+    assert ob.impact == "High" and ob.security_review["status"] == "waiting"
+    assert db.scalar(select(Notification).where(Notification.kind == "security_review")).person_id == who("crhodes").id
+    assert db.scalar(select(Task.id).where(Task.obligation_id == ob.id))  # owners already have their tasks
+    with pytest.raises(PermissionError):
+        approvals.record_security_review(db, ob, who("pnair"), True)  # only the CISO
+    with pytest.raises(ValueError):
+        approvals.record_security_review(db, ob, who("crhodes"), False)  # a concern needs a reason
+    approvals.record_security_review(db, ob, who("crhodes"), False, "Internet exposure is behind a VPN")
+    assert ob.security_review["status"] == "concern" and ob.impact == "High"  # never lowered here
+    f = db.scalar(select(Finding).where(Finding.kind == "impact_concern"))
+    assert db.get(Person, f.assigned_to_id).role == "risk_owner"
+    with pytest.raises(ValueError):
+        approvals.record_security_review(db, ob, who("crhodes"), True)  # already reviewed

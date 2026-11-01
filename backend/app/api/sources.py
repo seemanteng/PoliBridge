@@ -280,7 +280,6 @@ def guidance_view(db, g: M.Guidance) -> dict:
     asset = db.get(M.Asset, g.asset_id) if g.asset_id else None
     return {**ser(g), "obligation": ob.title, "obligation_kind": ob.kind, "obligation_status": ob.status,
             "asset": asset.name if asset else None, "recipient": name(g.recipient_id), "approver": name(g.approver_id),
-            "consult": name(g.consult_id),
             "topic_label": APPROVALS["clause_topics"].get(g.topic, {}).get("label") if g.topic else None}
 
 
@@ -308,12 +307,43 @@ def reject_guidance(gid: int, body: Reason, db=Depends(get_db), me=Depends(actor
     return guidance_view(db, g)
 
 
-@router.post("/guidance/{gid}/consult")
-def consult_guidance(gid: int, db=Depends(get_db), me=Depends(actor)):
-    g = one(db, M.Guidance, gid)
-    person = on_behalf(db, me, db.get(M.Person, g.consult_id) if g.consult_id else me, "guidance", gid, "consult")
-    guarded(lambda: approvals.consult_guidance(db, g, person))(db)
+@router.post("/guidance/{gid}/redraft")
+def redraft_guidance(gid: int, db=Depends(get_db)):
+    g = guarded(lambda: rag.redraft(db, one(db, M.Guidance, gid)))(db)
     return guidance_view(db, g)
+
+
+@router.post("/guidance/redraft-held")
+def redraft_held(db=Depends(get_db)):
+    """Try every held-back draft again, for example after the model or the quote check has been fixed."""
+    held = list(db.scalars(select(M.Guidance).join(M.Obligation, M.Obligation.id == M.Guidance.obligation_id).where(
+        M.Guidance.status.in_(("withheld", "rejected")), M.Obligation.is_test == False,  # noqa: E712
+        M.Obligation.status != "superseded")))
+    out = {"sent": 0, "waiting": 0, "still_held": 0, "skipped": []}
+    for g in held:
+        try:
+            new = rag.redraft(db, g)
+        except ValueError as e:  # nothing was changed
+            out["skipped"].append(str(e))
+            continue
+        out[{"released": "sent", "draft": "sent", "pending_approval": "waiting"}.get(new.status, "still_held")] += 1
+    db.commit()
+    return out
+
+
+class SecurityReview(BaseModel):
+    confirm: bool
+    note: str = ""
+
+
+@router.post("/obligations/{oid}/security-review")
+def security_review(oid: int, body: SecurityReview, db=Depends(get_db), me=Depends(actor)):
+    """C1: the CISO confirms a High-impact alert's rating, or questions it (C6), while the owners already work."""
+    ob = one(db, M.Obligation, oid)
+    person = on_behalf(db, me, _role_holder(db, approvals.APPROVALS["advisory"]["impact_review"]), "obligation", oid,
+                       "security_review")
+    guarded(lambda: approvals.record_security_review(db, ob, person, body.confirm, body.note))(db)
+    return ob.security_review
 
 
 @router.get("/obligations/{oid}/passages")
@@ -351,8 +381,8 @@ def approval_rules(db=Depends(get_db)):
     r = approvals.rules_view()
     who = lambda role: (lambda p: p.name if p else None)(approvals.holder(db, role))  # noqa: E731
     for t in r["topics"]:
-        t["approver_name"], t["consult_name"] = who(t["approver"]), who(t["consult"])
-    r["advisory"] = {**r["advisory"], "consult_name": who(r["advisory"]["consult"]),
+        t["approver_name"] = who(t["approver"])
+    r["advisory"] = {**r["advisory"], "impact_review_name": who(r["advisory"]["impact_review"]),
                      "withheld_name": who(r["advisory"]["withheld_to"])}
     r["fallback_name"] = who(r["segregation_fallback"])
     r["signoff"] = {**r["signoff"], "escalate_name": who(r["signoff"]["escalate_to"]),

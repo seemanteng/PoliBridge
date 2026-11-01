@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, fmt, fmtDay, refreshAll, useApi } from '../../api'
-import { Loading, Modal, useAction } from '../../ui'
+import { Badge, ImpactBadge, Loading, Modal, useAction } from '../../ui'
 import { ActionMenu, FeedBadge, KIND_LABEL, PeopleSelect, ReviewBadge, StatusBadge } from './common'
 import { NewVersionModal } from './NewVersion'
 
@@ -87,6 +87,12 @@ export default function Sources() {
   if (!sources) return <Loading error={error} />
   const feeds = sources.filter((s: any) => FEED_KINDS.includes(s.kind))
   const texts = sources.filter((s: any) => !FEED_KINDS.includes(s.kind))
+  // An advisory sent by several feeds is one alert: group every feed's alerts by obligation so it is listed once.
+  const feedId: Record<string, number> = Object.fromEntries(feeds.map((s: any) => [s.name, s.id]))
+  const combined: any[] = Object.values(feeds.flatMap((s: any) => s.alerts?.cves || [])
+    .reduce((m: Record<number, any>, a: any) => ({ ...m, [a.obligation_id]: m[a.obligation_id] || a }), {}))
+    .sort((a: any, b: any) => b.received_at.localeCompare(a.received_at))
+  const shared = combined.filter((a) => a.reported_by.length > 1).length
   const act = (path: string, body?: unknown) => run(async () => { await api.post(path, body); refreshAll() })
   const say = (r: any) => {
     const list = Array.isArray(r) ? r : [r]
@@ -132,10 +138,33 @@ export default function Sources() {
               <td>{s.owner || <span className="red">nobody</span>}</td>
               <td>{s.alerts && <><b>{s.alerts.alerts}</b> alert{s.alerts.alerts === 1 ? '' : 's'}{s.alerts.new > 0 && <> · <span className="blue">{s.alerts.new} new</span></>}
                 <div className="faint">{s.alerts.systems_affected} system{s.alerts.systems_affected === 1 ? '' : 's'} affected{s.alerts.awaiting_ack ? ` · ${s.alerts.awaiting_ack} waiting for owners` : ''}</div>
-                {s.alerts.queued > 0 && <div className="faint">{s.alerts.queued} demo alert{s.alerts.queued === 1 ? '' : 's'} queued</div>}</>}</td>
+                {s.alerts.queued > 0 && <div className="faint">{s.alerts.queued} demo alert{s.alerts.queued === 1 ? '' : 's'} queued</div>}
+                {(s.alerts.cves || []).length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
+                  {s.alerts.cves.map((a: any) => {
+                    const others = a.reported_by.filter((r: any) => r.source !== s.name).map((r: any) => r.source)
+                    return <span key={a.obligation_id} className="mono" title={others.length ? `Same alert as in ${others.join(', ')}` : 'Only this feed reported it'}
+                      style={{ fontSize: 11.5, padding: '1px 7px', borderRadius: 999, border: `1px solid ${others.length ? '#b9cafa' : 'var(--line)'}`, background: others.length ? 'var(--blue-soft)' : undefined }}>
+                      {a.cve}{others.length > 0 && <span style={{ fontFamily: 'Inter, system-ui, sans-serif' }}> · also {others.length > 1 ? `${others.length} feeds` : others[0]}</span>}</span>
+                  })}</div>}</>}</td>
               <td style={{ textAlign: 'center' }}>{sourceActions(s, true)}</td>
             </tr>))}
           {!feeds.length && <tr><td colSpan={5} className="muted">No security feeds yet.</td></tr>}</tbody></table>
+
+        {combined.length > 0 && <>
+          <h2 style={{ marginTop: 20 }}>Alerts across all feeds</h2>
+          <p className="muted" style={{ maxWidth: 720 }}>Each alert once, with every feed that reported it. When two feeds send the same CVE it is combined into one alert with one set of tasks, so it only needs handling once.
+            {shared > 0 && <> <b>{shared} alert{shared === 1 ? ' was' : 's were'} reported by more than one feed.</b></>}</p>
+          <table style={{ marginTop: 6 }}><thead><tr><th>Alert</th><th>Reported by</th><th>Systems affected</th></tr></thead><tbody>
+            {combined.map((a) => (
+              <tr key={a.obligation_id}>
+                <td><Link to={`/acknowledgements/${a.obligation_id}`}><b className="mono">{a.cve}</b></Link> · {a.product}
+                  {a.new && <> <Badge kind="info">New</Badge></>} {a.impact && <ImpactBadge impact={a.impact} short />}
+                  {a.conflict && <div className="faint red" style={{ maxWidth: 360 }}>Feeds disagree: {a.conflict}</div>}</td>
+                <td>{a.reported_by.length > 1 && <Badge kind="ok">Same alert · {a.reported_by.length} feeds</Badge>}
+                  {a.reported_by.map((r: any) => (
+                    <div key={r.source} style={{ marginTop: 3 }}>{feedId[r.source] ? <Link to={`/documents?tab=feed&source=${feedId[r.source]}`}>{r.source}</Link> : r.source}
+                      <span className="faint"> · received {fmt(r.received_at)}</span></div>))}</td>
+                <td><b className={a.systems_affected ? 'red' : ''}>{a.systems_affected}</b> <span className="faint">open task{a.systems_affected === 1 ? '' : 's'}</span></td></tr>))}</tbody></table></>}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>

@@ -75,6 +75,7 @@ export function AdvisoryList() {
   const mine = rows.filter((r: any) => r.status === 'pending' || r.status === 'overdue')
   const canReview = true
   const toReview: any[] = obs.filter((o: any) => o.status === 'candidate')
+  const toConfirm: any[] = obs.filter((o: any) => o.security_review?.status === 'waiting')
 
   const cell = (r: any) => (
     <tr key={r.key}>
@@ -97,9 +98,14 @@ export function AdvisoryList() {
         <button className="btn primary" onClick={() => setAdding('choose')}>Add something new</button>
       </div>
 
-      <div className="card" style={{ marginTop: 14, borderColor: (mine.length || toReview.length) ? 'var(--blue)' : undefined }}>
+      <div className="card" style={{ marginTop: 14, borderColor: (mine.length || toReview.length || toConfirm.length) ? 'var(--blue)' : undefined }}>
         <h2>Needs action</h2>
-        {!mine.length && !toReview.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs action right now.</p>}
+        {!mine.length && !toReview.length && !toConfirm.length && <p className="muted" style={{ marginTop: 6 }}>Nothing needs action right now.</p>}
+        {toConfirm.map((o: any) => (
+          <div key={`sr${o.id}`} className="ack-action-row">
+            <div><Link to={`/acknowledgements/${o.id}`}><b>{o.title}</b></Link> <ImpactBadge impact="High" />
+              <div className="muted">Security review (C1): {o.security_review.reviewer || 'the CISO'} confirms the High rating. The owners already have their tasks.</div></div>
+            <button className="btn sm primary" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/security-review`, { confirm: true }); refreshAll() })}>Confirm High as {(o.security_review.reviewer || 'CISO').split(' ')[0]}</button></div>))}
         {toReview.length > 0 && (
           <div className="ack-action-row">
             <div><b>{toReview.length} clause{toReview.length > 1 ? 's' : ''} to review</b><div className="muted">Decide what each changed clause means for the departments involved.</div></div>
@@ -272,6 +278,31 @@ function Guidance({ g }: { g: any }) {
   )
 }
 
+// C1: on a High-impact alert the CISO confirms the rating while the owners already work. A questioned rating is never
+// lowered here; it goes to the accountable risk owner to decide (C6).
+function SecurityReview({ o }: { o: any }) {
+  const r = o.security_review
+  const { run, error, busy } = useAction()
+  const [asking, setAsking] = useState(false)
+  const [note, setNote] = useState('')
+  const send = (confirm: boolean) => run(async () => { await api.post(`/obligations/${o.id}/security-review`, { confirm, note }); refreshAll() })
+  return (
+    <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+      <div className="faint">Security review (C1) · runs alongside the owners' work, never holds it up</div>
+      {r.status === 'waiting' && <><p style={{ margin: '4px 0' }}>Waiting for {r.reviewer || 'the CISO'} to confirm the High rating.</p>
+        <div style={{ display: 'flex', gap: 6 }}><button className="btn sm primary" disabled={busy} onClick={() => send(true)}>Confirm High (as {(r.reviewer || 'CISO').split(' ')[0]})</button>
+          <button className="btn sm" onClick={() => setAsking(true)}>Question the rating</button></div></>}
+      {r.status === 'confirmed' && <p style={{ margin: '4px 0' }}><span className="blue">✓</span> Confirmed by {r.by} · {fmt(r.at)}</p>}
+      {r.status === 'concern' && <p style={{ margin: '4px 0' }}><Badge kind="cd">Questioned</Badge> by {r.by}: {r.note} <span className="faint">The accountable risk owner decides (C6); deadlines stay High meanwhile.</span></p>}
+      {error && <p className="err">{error}</p>}
+      {asking && <Modal title="Question the High rating" sub="The rating isn't lowered here. The accountable risk owner gets a finding and decides (C6); owners keep working to the High deadlines meanwhile." onClose={() => setAsking(false)}>
+        <label>What is wrong with the rating?</label><textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+        <div className="actions"><button className="btn" onClick={() => setAsking(false)}>Cancel</button>
+          <button className="btn primary" disabled={busy || !note.trim()} onClick={async () => { if (await send(false)) setAsking(false) }}>Send to risk owner</button></div></Modal>}
+    </div>
+  )
+}
+
 export function AdvisoryDetail() {
   const { id } = useParams()
   const { data: o, error } = useApi(`/obligations/${id}`)
@@ -317,7 +348,9 @@ export function AdvisoryDetail() {
                 <div className="faint">{g.status === 'pending_approval' ? `approver ${g.approver}` : g.status === 'released' ? `approved by ${g.approver}${g.human_authored ? ' · written by hand' : ''}` : g.reason}</div>
                 {g.status === 'released' && <GuidanceText g={g} />}
                 {g.status === 'pending_approval' && <button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => run(async () => { await api.post(`/guidance/${g.id}/approve`); refreshAll() })}>Approve as {g.approver}</button>}
-                {(g.status === 'withheld' || g.status === 'rejected') && <button className="btn sm primary" style={{ marginTop: 4 }} onClick={() => setWriting(g)}>Write guidance</button>}</>
+                {(g.status === 'withheld' || g.status === 'rejected') && <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${g.id}/redraft`); refreshAll() })}>Try again</button>
+                  <button className="btn sm primary" onClick={() => setWriting(g)}>Write guidance</button></div>}</>
                 : <span className="faint">{o.status === 'candidate' ? 'drafted after approval' : d.label === 'does_not_apply' ? 'none needed' : '—'}</span>}</td>
               <td>{d.signed_at ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{d.signed_by} · {fmt(d.signed_at)}{d.entered_by && <> · entered by {d.entered_by}</>}</div></>
                 : o.status === 'candidate' ? <span className="muted">Awaiting Compliance / Legal</span>
@@ -358,7 +391,8 @@ export function AdvisoryDetail() {
             <div><div className="faint">Acknowledge</div><b>{t.ack_hours ? `${t.ack_hours}h` : `${t.ack_working_days} working days`}</b></div>
             <div><div className="faint">Interim control</div><b>{t.interim_hours ? `${t.interim_hours}h` : 'Not required'}</b></div>
             <div><div className="faint">Remediate</div><b>{t.remediate_hours / 24} days</b></div>
-          </div></div>
+          </div>
+          {o.security_review && <SecurityReview o={o} />}</div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -414,12 +448,12 @@ export function AdvisoryDetail() {
           if (!x) return <p className="muted" style={{ marginTop: 10 }}>Working out the fix…</p>
           return x.status === 'draft' ? <Guidance g={x} /> : (
             <div className="note fail" style={{ marginTop: 8 }}><b>Withheld for human review</b><p>{x.reason}</p>
-              <button className="btn sm" onClick={() => run(async () => { await api.post(`/obligations/${o.id}/guidance`, { role: 'system owner' }); refreshAll() })}>Try again</button></div>)
+              <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/redraft`); refreshAll() })}>Try again</button></div>)
         })()}
       </div>
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Guidance sent to each system</h2>
-        <p className="muted">Instructions for each system owner, written from that system's own component record. They are sent straight away; Information Security then double-checks them. If a draft could not be written reliably it is held back for a person to write.</p>
+        <p className="muted">Filled in for each owner from the alert and their own system's record, using a fixed template with no AI (§7.2). Sent at once (fast path, C1). If a draft fails the quote check it is held back for a person to write.</p>
         {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded').map((x: any) => {
           const lines: string[] = (x.text || '').replace(/^For the [^:]*:\s*/, '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/)
             .map((l: string) => l.replace(/^(What we know|The fix|What you need to do):\s*/, '').trim()).filter(Boolean)
@@ -428,11 +462,7 @@ export function AdvisoryDetail() {
           return (
             <div key={x.id} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '12px 14px', marginTop: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <div><b>{x.asset}</b> <span className="faint">· owner {x.recipient || 'none'}</span></div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {x.consult && (x.consulted_at ? <Badge kind="info">✓ Checked by {x.consult} · {fmt(x.consulted_at)}</Badge>
-                    : <><span className="faint">Not yet checked by {x.consult}</span>
-                      <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/consult`); refreshAll() })}>Mark as checked</button></>)}</div></div>
+                <div><b>{x.asset}</b> <span className="faint">· owner {x.recipient || 'none'}</span></div></div>
               {x.status === 'released' ? <>
                 {why.length > 0 && <div style={{ marginTop: 10 }}><div className="faint" style={{ fontWeight: 600 }}>WHERE THIS STANDS</div>
                   {why.map((l, i) => <p key={i} style={{ margin: '2px 0' }}>{l}</p>)}</div>}
@@ -442,7 +472,9 @@ export function AdvisoryDetail() {
                   <summary className="faint" style={{ cursor: 'pointer' }}>Based on {x.citations.length} record{x.citations.length > 1 ? 's' : ''}</summary>
                   <ul style={{ margin: '4px 0 0', paddingLeft: 18 }} className="faint">{x.citations.map((c: any, i: number) => <li key={i}>{c.source}</li>)}</ul></details>}</>
               : <div style={{ marginTop: 10 }}><Badge kind="over">Held back</Badge> <span className="faint">{x.reason}</span>
-                  <div><button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => setWriting(x)}>Write guidance</button></div></div>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button className="btn sm" onClick={() => run(async () => { await api.post(`/guidance/${x.id}/redraft`); refreshAll() })}>Try again</button>
+                    <button className="btn sm primary" onClick={() => setWriting(x)}>Write guidance</button></div></div>}
             </div>)})}
         {!o.guidance.some((x: any) => x.asset) && <p className="muted" style={{ marginTop: 8 }}>No system needs action for this advisory.</p>}
       </div>

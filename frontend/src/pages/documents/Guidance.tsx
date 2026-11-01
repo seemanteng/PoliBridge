@@ -64,7 +64,8 @@ function RejectModal({ g, onClose }: { g: any; onClose: () => void }) {
 
 const For = ({ g }: { g: any }) => (
   <><Link to={`/acknowledgements/${g.obligation_id}`}><b>{g.obligation}</b></Link>
-    <div className="faint">for {g.department ? `${g.department} · ${g.recipient || 'no head'}` : `${g.asset} · ${g.recipient || 'no owner'}`}
+    <div className="faint">{g.department ? `for ${g.department} · ${g.recipient || 'no head'}` : g.asset ? `for ${g.asset} · ${g.recipient || 'no owner'}`
+      : 'general fix summary · shown on the alert page, not sent to anyone'}
       {g.topic_label ? ` · ${g.topic_label}` : g.asset ? ' · security alert' : ''}</div></>
 )
 
@@ -72,15 +73,20 @@ export default function Guidance() {
   const { data: all, error } = useApi('/guidance')
   const { run, error: aerr, busy } = useAction()
   const [dlg, setDlg] = useState<null | { kind: 'write' | 'reject'; g: any }>(null)
+  const [note, setNote] = useState('')
   if (!all) return <Loading error={error} />
   const pending = all.filter((g: any) => g.status === 'pending_approval')
   const held = all.filter((g: any) => g.status === 'withheld' || g.status === 'rejected')
-  const checks = all.filter((g: any) => g.status === 'released' && g.consult && !g.consulted_at)
   const released = all.filter((g: any) => g.status === 'released')
   const act = (path: string) => run(async () => { await api.post(path); refreshAll() })
+  const retryAll = () => run(async () => {
+    const r = await api.post('/guidance/redraft-held')
+    setNote(`${r.sent} sent, ${r.waiting} waiting for approval, ${r.still_held} still held back${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.`)
+    refreshAll()
+  })
   return (
     <>
-      <p className="muted" style={{ margin: '14px 0 0', maxWidth: 820 }}>The AI drafts instructions for each owner from the source text, company policy and the system's records, and every quote is checked against the original. The AI never decides whether something applies, accepts risk or closes a task; people do. Security alert guidance goes straight to the system owner while Information Security double-checks it. Other guidance waits for its approver (Legal for legal clauses, Compliance for the rest), who can never be the person receiving it.</p>
+      <p className="muted" style={{ margin: '14px 0 0', maxWidth: 820 }}>Guidance is the short note telling an owner what to do. For a security alert it is filled in from a fixed template using the alert and the system's own record, with no AI, and goes straight to the owner. For a changed law, policy or contract clause the AI drafts it, and it waits for its approver (Legal for legal clauses, Compliance for the rest), who can never be the person receiving it. Every quote is checked against the original, and guidance never decides whether something applies, accepts risk or closes a task; people do.</p>
       <div className="grid g2">
         <div className="card" style={{ borderColor: pending.length ? 'var(--blue)' : undefined }}><h2>Waiting for approval ({pending.length})</h2>
           {pending.map((g: any) => (
@@ -88,29 +94,28 @@ export default function Guidance() {
               <For g={g} /><GuidanceText g={g} />
               <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <button className="btn sm primary" disabled={busy} onClick={() => act(`/guidance/${g.id}/approve`)}>Approve as {g.approver}</button>
-                <button className="btn sm" onClick={() => setDlg({ kind: 'reject', g })}>Reject</button>
-                {g.consult && <span className="faint">{g.consult} is also reviewing{g.consulted_at ? ' · done' : ''}</span>}</div></div>))}
+                <button className="btn sm" onClick={() => setDlg({ kind: 'reject', g })}>Reject</button></div></div>))}
           {!pending.length && <p className="muted" style={{ marginTop: 6 }}>Nothing waiting. Guidance is drafted when a regulation clause is approved on the Acknowledgements page.</p>}</div>
-        <div className="card" style={{ borderColor: held.length ? 'var(--red-line)' : undefined }}><h2>Held back ({held.length})</h2>
+        <div className="card" style={{ borderColor: held.length ? 'var(--red-line)' : undefined }}>
+          <div className="sec" style={{ marginBottom: 0 }}><h2>Held back ({held.length})</h2>
+            {held.length > 0 && <button className="btn sm" disabled={busy} onClick={retryAll}>Try all again</button>}</div>
+          <p className="muted">Drafts that misquoted a source, or whose sources disagree. They are not sent to anyone until the AI gets them right on another try, or Compliance writes them by hand.</p>
+          {note && <p className="faint" style={{ marginTop: 4 }}>{note}</p>}
           {held.map((g: any) => (
             <div key={g.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
               <For g={g} /><div style={{ fontSize: 13, marginTop: 4 }}><Badge kind="over">{STATUS[g.status][1]}</Badge> {g.reason}</div>
-              <button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => setDlg({ kind: 'write', g })}>Write guidance</button></div>))}
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="btn sm" disabled={busy} onClick={() => act(`/guidance/${g.id}/redraft`)}>Try again</button>
+                {(g.department || g.asset) && <button className="btn sm primary" onClick={() => setDlg({ kind: 'write', g })}>Write guidance</button>}</div></div>))}
           {!held.length && <p className="muted" style={{ marginTop: 6 }}>No drafts have been held back.</p>}</div>
       </div>
-      {checks.length > 0 && <div className="card" style={{ marginTop: 16 }}><h2>Waiting for a security double-check ({checks.length})</h2>
-        <p className="muted">Already sent to the owner. Information Security confirms the advice is correct, but doesn't need to approve it first.</p>
-        <table><tbody>{checks.map((g: any) => (
-          <tr key={g.id}><td><For g={g} /></td><td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-            <button className="btn sm" disabled={busy} onClick={() => act(`/guidance/${g.id}/consult`)}>Mark as checked ({g.consult})</button></td></tr>))}</tbody></table></div>}
       <div className="card" style={{ marginTop: 16 }}><h2>Sent ({released.length})</h2>
-        <table><thead><tr><th>Guidance</th><th>Approved by</th><th>Written by</th><th>Security check</th></tr></thead><tbody>
+        <table><thead><tr><th>Guidance</th><th>Approved by</th><th>Written by</th></tr></thead><tbody>
           {released.map((g: any) => (
             <tr key={g.id}><td><For g={g} /><GuidanceText g={g} /></td>
-              <td>{g.asset && !g.human_authored ? <span className="faint">sent straight away</span> : <>{g.approver}<div className="faint">{fmt(g.approved_at)}</div></>}</td>
-              <td>{g.human_authored ? <Badge kind="cd">By hand</Badge> : <span className="mono faint">{g.engine}</span>}</td>
-              <td>{g.consult ? (g.consulted_at ? <>{g.consult}<div className="faint">{fmt(g.consulted_at)}</div></> : <span className="faint">{g.consult} · pending</span>) : <span className="faint">—</span>}</td></tr>))}
-          {!released.length && <tr><td colSpan={4} className="muted">Nothing sent yet.</td></tr>}</tbody></table></div>
+              <td>{g.asset && !g.human_authored ? <span className="faint">sent straight away (security alert)</span> : <>{g.approver}<div className="faint">{fmt(g.approved_at)}</div></>}</td>
+              <td>{g.human_authored ? <Badge kind="cd">By hand</Badge> : (g.engine || '').startsWith('template') ? <span className="faint">fixed template</span> : <span className="faint">AI ({g.engine})</span>}</td></tr>))}
+          {!released.length && <tr><td colSpan={3} className="muted">Nothing sent yet.</td></tr>}</tbody></table></div>
       {aerr && <p className="err">{aerr}</p>}
       {dlg?.kind === 'write' && <WriteGuidanceModal g={dlg.g} onClose={() => setDlg(null)} />}
       {dlg?.kind === 'reject' && <RejectModal g={dlg.g} onClose={() => setDlg(null)} />}

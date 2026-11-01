@@ -218,6 +218,8 @@ class Obligation(Base):
     supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("obligation.id"), nullable=True)
     superseded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_version_id: Mapped[int | None] = mapped_column(ForeignKey("source_version.id"), nullable=True)
+    # C1: on a High-impact alert the CISO confirms the rating in parallel: {status: waiting|confirmed|concern, by, at, note}
+    security_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -371,8 +373,6 @@ class Guidance(Base):
     topic: Mapped[str | None] = mapped_column(String, nullable=True)  # approvals.yaml clause topic
     approver_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    consult_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)  # reviews in parallel
-    consulted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     human_authored: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

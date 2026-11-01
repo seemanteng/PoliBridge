@@ -23,17 +23,13 @@ def clause_topic(text: str) -> str:
     return APPROVALS["default_topic"]
 
 
-def route_clause(db, ob: Obligation, recipient: Person | None) -> tuple[str, Person | None, Person | None]:
-    """(topic, approver, consulted). The approver may never be the recipient (segregation of duties)."""
+def route_clause(db, ob: Obligation, recipient: Person | None) -> tuple[str, Person | None]:
+    """(topic, approver). The approver may never be the recipient (segregation of duties)."""
     topic = clause_topic(ob.quotation or ob.title)
-    cfg = APPROVALS["clause_topics"][topic]
-    approver = holder(db, cfg["approver"])
+    approver = holder(db, APPROVALS["clause_topics"][topic]["approver"])
     if approver is None or (recipient and approver.id == recipient.id):
         approver = holder(db, APPROVALS["segregation_fallback"])
-    consult = holder(db, cfg.get("consult"))
-    if consult and recipient and consult.id == recipient.id:
-        consult = None
-    return topic, approver, consult
+    return topic, approver
 
 
 def withheld_to(db, ob: Obligation) -> Person | None:
@@ -74,16 +70,39 @@ def reject_guidance(db, g: Guidance, person: Person, reason: str):
     audit.log(db, person.directory_id, "guidance", g.id, "rejected", reason=reason)
 
 
-def consult_guidance(db, g: Guidance, person: Person, note: str = ""):
-    """The parallel review: Information Security confirms the advice is technically right. Not a gate."""
-    if g.consult_id is None:
-        raise ValueError("this guidance has no parallel review")
-    if person.id != g.consult_id:
-        raise PermissionError("only the routed reviewer can record this check")
-    if g.consulted_at:
-        raise ValueError("already checked")
-    g.consulted_at = clock.now()
-    audit.log(db, person.directory_id, "guidance", g.id, "consulted", note=note or None)
+# ---------- C1: Security reviews each High-impact alert in parallel ----------
+def request_security_review(db, ob: Obligation):
+    """A High-impact alert reaches its owners at once (C1 fast path); Security is told at the same time and confirms
+    the rating. Nothing waits for this review."""
+    if ob.kind != "advisory" or ob.is_test or ob.impact != "High" or ob.security_review:
+        return
+    ciso = holder(db, APPROVALS["advisory"]["impact_review"])
+    ob.security_review = {"status": "waiting", "requested_at": clock.now().isoformat(),
+                          "reviewer": ciso.name if ciso else None}
+    notify(db, person=ciso, kind="security_review",
+           message=f"High-impact alert {ob.title}: owners already have their tasks. Confirm the impact rating.")
+    audit.log(db, "system", "obligation", ob.id, "security_review_requested")
+
+
+def record_security_review(db, ob: Obligation, person: Person, confirm: bool, note: str = ""):
+    """The CISO confirms the High rating, or questions it. A questioned rating is never lowered here: it goes to the
+    accountable risk owner to decide (C6), and the owners keep working to the High deadlines meanwhile."""
+    review = dict(ob.security_review or {})
+    if review.get("status") != "waiting":
+        raise ValueError("this alert has no security review waiting")
+    reviewer = holder(db, APPROVALS["advisory"]["impact_review"])
+    if reviewer is None or person.id != reviewer.id:
+        raise PermissionError(f"the security review belongs to {reviewer.name if reviewer else 'the CISO'}")
+    if not confirm and not (note or "").strip():
+        raise ValueError("say what is wrong with the rating")
+    review.update(status="confirmed" if confirm else "concern", by=person.name, at=clock.now().isoformat(),
+                  note=(note or "").strip() or None)
+    ob.security_review = review
+    audit.log(db, person.directory_id, "obligation", ob.id, "security_review", verdict=review["status"], note=review["note"])
+    if not confirm:
+        raise_finding(db, "impact_concern", "Medium", f"{ob.title}: High rating questioned by Security",
+                      f"{person.name}: {review['note']} The accountable risk owner decides (C6); deadlines stay High meanwhile.",
+                      assigned_to=holder(db, APPROVALS["advisory"]["impact_concern_to"]))
 
 
 def check_clause_signoffs(db) -> list[str]:
@@ -152,13 +171,13 @@ def approval_map(db, person: Person) -> dict:
     sections = []
     # every role can end up owning a task (fallback routing), so the system-owner view applies to everyone
     sections += [
-        {"key": "guidance", "label": "Get fix guidance", "steps": [
-            _step(P(None, "PoliBridge"), "sys", "Drafts fix advice from the advisory, the policy and the system's own component record", "RAG"),
-            _step(P(None, "PoliBridge"), "sys", "Checks every quote is real; holds back weak or conflicting drafts", "A4"),
-            _step(me, "owner", "Receives the advice straight away, without waiting for approval", "C1"),
-            _step(P(holder(db, APPROVALS["advisory"]["consult"])), "parallel", "Checks the advice is technically right, alongside", "C1"),
-            _step(P(holder(db, APPROVALS["advisory"]["withheld_to"])), "approve",
-                  "If the draft was held back: writes or approves the guidance instead", "A4")]},
+        {"key": "guidance", "label": "Get fix instructions", "steps": [
+            _step(P(None, "PoliBridge"), "sys", "Fills in the instructions from the alert and the system's own record (no AI)", "§7.2"),
+            _step(me, "owner", "Receives the task and instructions straight away, without waiting for approval", "C1"),
+            _step(P(holder(db, APPROVALS["advisory"]["impact_review"])), "parallel",
+                  "Confirms a High-impact rating at the same time; owners keep working meanwhile", "C1"),
+            _step(P(holder(db, APPROVALS["advisory"]["impact_concern_to"])), "approve",
+                  "Decides if Security questions the rating", "C6")]},
         {"key": "ack", "label": "Acknowledge a task", "steps": [
             _step(me, "owner", f"Signs the acknowledgement within {hi['ack_hours']} hours (High impact)", "D1"),
             _step(P(first_up), "late", f"Told if not signed after {esc[0]['after_hours']} hours", "D1"),
@@ -193,7 +212,7 @@ def approval_map(db, person: Person) -> dict:
     for b in heads:
         for key, cfg in APPROVALS["clause_topics"].items():
             fake = Obligation(kind="regulatory", title=cfg["label"], quotation=cfg["keywords"][0])
-            _, approver, consult = route_clause(db, fake, person)
+            _, approver = route_clause(db, fake, person)
             swapped = holder(db, cfg["approver"]) and holder(db, cfg["approver"]).id == person.id
             cco_late = cco and cco.id == person.id
             late = holder(db, APPROVALS["signoff"]["escalate_to_if_cco"]) if cco_late else cco
@@ -203,8 +222,6 @@ def approval_map(db, person: Person) -> dict:
                 _step(P(None, "PoliBridge"), "sys", f"Drafts guidance written for {b.name}, quoting the clause", "RAG"),
                 _step(P(approver), "approve", "Approves the guidance before it is released"
                       + (" (the usual approver is the recipient, so the CCO steps in)" if swapped else ""), "A4")]
-            if consult:
-                steps.append(_step(P(consult), "parallel", "Checks the security advice is technically right", "C1"))
             steps += [_step(me, "owner", f"Receives the guidance and signs off the label for {b.name}", "§6.2"),
                       _step(P(late), "late", f"Told if the sign-off is not done within {APPROVALS['signoff']['working_days']} working days", "approvals.yaml")]
             sections.append({"key": f"clause-{b.id}-{key}", "label": f"{cfg['label']} for {b.name}", "steps": steps})
@@ -212,13 +229,11 @@ def approval_map(db, person: Person) -> dict:
     for key, cfg in APPROVALS["clause_topics"].items():
         if holder(db, cfg["approver"]) and holder(db, cfg["approver"]).id == person.id:
             approves.append(f"{cfg['label']} guidance (unless it is addressed to {person.name})")
-        if holder(db, cfg.get("consult")) and holder(db, cfg.get("consult")).id == person.id:
-            approves.append(f"{cfg['label']} guidance: technical check alongside")
     if person.role == "cco":
         approves += ["New sources for the approved-source registry",
                      "Any guidance whose usual approver is also its recipient"]
-    if holder(db, APPROVALS["advisory"]["consult"]) and holder(db, APPROVALS["advisory"]["consult"]).id == person.id:
-        approves.append("Advisory fix guidance: technical check alongside the owner")
+    if holder(db, APPROVALS["advisory"]["impact_review"]) and holder(db, APPROVALS["advisory"]["impact_review"]).id == person.id:
+        approves.append("High-impact ratings on security alerts, in parallel with the owners (C1)")
     roles = {"ciso": ["Critical-system fix evidence (C2)", "Sensitive-data fix evidence, with Compliance (C3)"],
              "compliance": ["Sensitive-data and regulatory fix evidence (C3, C4)", "Regulatory clauses as obligations"],
              "legal": ["Fix evidence where a legal or reporting duty is triggered (C4)", "Regulatory clauses as obligations"],
@@ -233,7 +248,7 @@ def approval_map(db, person: Person) -> dict:
 
 def rules_view() -> dict:
     return {"advisory": APPROVALS["advisory"],
-            "topics": [{"key": k, "label": v["label"], "keywords": v["keywords"], "approver": v["approver"],
-                        "consult": v.get("consult")} for k, v in APPROVALS["clause_topics"].items()],
+            "topics": [{"key": k, "label": v["label"], "keywords": v["keywords"], "approver": v["approver"]}
+                       for k, v in APPROVALS["clause_topics"].items()],
             "default_topic": APPROVALS["default_topic"], "segregation_fallback": APPROVALS["segregation_fallback"],
             "withheld_to": APPROVALS["withheld_to"], "signoff": APPROVALS["signoff"]}
