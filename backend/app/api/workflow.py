@@ -83,6 +83,8 @@ def signoff(oid: int, body: Signoff, db=Depends(get_db), me=Depends(actor)):
 # ---------- alerts ----------
 def _ladder(db, t: M.Task) -> dict:
     kinds = {n.kind for n in db.scalars(select(M.Notification).where(M.Notification.task_id == t.id))}
+    if "deadline_missed" in kinds:  # already at the top (e.g. found after its deadline): never offer a lower step
+        return {"escalated_to": "risk owner and senior management", "next": None}
     if t.acknowledged_at is None:
         order = ["escalate_manager", "escalate_ciso", "deadline_missed"]
         names = ["owner's manager", "CISO", "risk owner and senior management"]

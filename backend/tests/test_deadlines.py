@@ -59,7 +59,8 @@ def test_found_after_the_deadline_escalates_at_once(db, who):
     assert rows["interim"]["window"] == "4h (found late)" and "Already past" in rows["remediate"]["why"]
     c = client(db)
     items = c.get("/api/alerts").json()["items"]
-    assert any(i["type"] == "found_late" and i["task_id"] == t.id for i in items)
+    late = next(i for i in items if i["type"] == "found_late" and i["task_id"] == t.id)
+    assert late["next"] is None and late["escalated_to"] == "risk owner and senior management"
     from app.main import app
     app.dependency_overrides.clear()
 
