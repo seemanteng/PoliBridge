@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.clock import clock
 from app.models import Claim, Finding, Notification, Task
-from app.services import assurance, closure, intake, views
+from app.services import assignment, assurance, closure, intake, views
 from .conftest import STRUTS, sign_required
 from .test_api import client, h
 from .test_scenarios import claim_for, kinds, task_for
@@ -168,6 +168,52 @@ def test_risk_acceptance_ends_an_open_disagreement(db, who):
     assignment.approve_risk_acceptance(db, ra, who("rpark"))
     assurance.sweep(db)
     assert t.signoff_dispute["resolved_at"] and "risk accepted" in t.signoff_dispute["resolved_how"]
+
+
+# ---------- vendor fix (E6), response rules, claim severity ----------
+def test_fix_must_reach_the_vendors_fixed_release(db, who):
+    ob = intake.ingest_advisory(db, **STRUTS)
+    t = task_for(db, ob, "Credit Report Portal", "remediation")
+    vf = closure.vendor_fix(db, t)
+    assert vf["required"] == "2.3.32" and vf["current"] == "2.3.31"
+    closure.mark_fixed(db, t, who("atan"))
+    clock.advance(hours=1)
+    sub = dict(purpose="remediation", asset_name="Credit Report Portal", component="Apache Struts",
+               scope=["/opt/portal/**"], method="authenticated_scan")
+    # 2.3.4 is outside the affected ranges, but it is a downgrade, not the vendor's fix
+    down = closure.submit_evidence(db, t, who("atan"), **sub, observed_version="2.3.4", timestamp=clock.now())
+    assert down.status == "rejected" and any(r.startswith("E6") for r in down.reasons)
+    good = closure.submit_evidence(db, t, who("atan"), **sub, observed_version="2.3.32", timestamp=clock.now())
+    assert good.status == "pending"
+    row = next(r for r in closure.evidence_checks(db, good)["checks"] if r["check"] == "Vendor fix")
+    assert row["pass"] and "2.3.32 or later" in row["requires"]
+
+
+def test_response_rules_explain_each_window(db, who):
+    ob = intake.ingest_advisory(db, **STRUTS)
+    t = task_for(db, ob, "Credit Report Portal", "remediation")
+    rr = views.response_rules(db, t)
+    rows = {r["key"]: r for r in rr["rows"]}
+    assert t.impact == "High" and set(rows) == {"acknowledge", "interim", "remediate"}
+    assert rows["acknowledge"]["window"] == "24h" and rows["acknowledge"]["state"] == "running"
+    assert "manager at 24h" in rows["acknowledge"]["if_missed"] and "CISO at 48h" in rows["acknowledge"]["if_missed"]
+    assert rows["remediate"]["window"] == "7 days" and all(r["why"] for r in rr["rows"]) and rr["start_note"]
+    assignment.acknowledge(db, t, who("atan"))
+    assert views.response_rules(db, t)["rows"][0]["state"] == "met"
+    clock.advance(days=8)
+    assert {r["key"]: r for r in views.response_rules(db, t)["rows"]}["remediate"]["state"] == "missed"
+
+
+def test_claim_severity_follows_the_system_not_the_whole_advisory(db, who):
+    ob = intake.ingest_advisory(db, **STRUTS)
+    assert views.claim_severity(db, claim_for(db, ob, "Credit Report Portal"))["level"] == "High"
+    hr = views.claim_severity(db, claim_for(db, ob, "HR Intranet"))
+    assert hr["level"] in ("High", "Medium", "Low") and "HR Intranet" in hr["basis"]
+    c = client(db)
+    listed = c.get("/api/claims").json()
+    assert all("severity" in x for x in listed)
+    from app.main import app
+    app.dependency_overrides.clear()
 
 
 # ---------- API and screens ----------

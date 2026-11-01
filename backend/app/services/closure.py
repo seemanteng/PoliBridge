@@ -52,6 +52,11 @@ def submit_evidence(db, task: Task, person: Person, *, purpose: str, asset_name,
         affected_specs=adv.affected_versions if adv else [], now=clock.now())
     if purpose == "absence" and comp and adv and versions.affected(comp.version, adv.affected_versions):
         reasons.append("E1: inventory records show the component present at an affected version")
+    vf = vendor_fix(db, task)
+    if purpose == "remediation" and vf and not renewal:
+        gap = E.vendor_fix_gap(observed_version, vf["required"])
+        if gap and gap not in reasons:
+            reasons.append(gap)
     ev = Evidence(task_id=task.id, purpose=purpose, asset_name=asset_name, component=component,
                   scope=scope or [], method=method, observed_version=observed_version, timestamp=timestamp,
                   submitter_id=person.id, reasons=reasons, status="rejected" if reasons else "pending",
@@ -63,6 +68,24 @@ def submit_evidence(db, task: Task, person: Person, *, purpose: str, asset_name,
     if reasons:
         _on_rejected(db, task, ev)
     return ev
+
+
+def vendor_fix(db, task: Task) -> dict | None:
+    """What the vendor told owners to do for this task's advisory, worked out for the version line the system runs.
+    None when the task is not about an advisory, or the vendor published no fixed release."""
+    ob = db.get(Obligation, task.obligation_id)
+    adv = db.get(Advisory, ob.advisory_id) if ob and ob.advisory_id else None
+    if adv is None or not adv.fixed_version:
+        return None
+    asset = db.get(Asset, task.asset_id)
+    comp = next((c for c in asset.components if versions.norm(c.name) == versions.norm(adv.product)), None)
+    from .registry import required_fix  # local import avoids a cycle
+    options = [f.strip() for f in adv.fixed_version.split(",") if f.strip()]
+    required = required_fix(comp.version, adv.fixed_version) if comp else min(options, key=versions.parse)
+    issuers = [s.get("source") for s in (adv.sources or []) if s.get("source")]
+    return {"cve": adv.cve, "product": adv.product, "published": adv.fixed_version, "required": required,
+            "current": comp.version if comp else None, "issuers": issuers,
+            "published_at": adv.published_at.isoformat() if adv.published_at else None}
 
 
 def _on_rejected(db, task: Task, ev: Evidence):
@@ -437,13 +460,22 @@ def evidence_checks(db, ev: Evidence) -> dict:
          "recorded": (ev.method or "—").replace("_", " "),
          "pass": bool(ev.method) and (ev.method == renewal.verification_method if renewal else
                                       not strong or ev.method in E.STRONG_METHODS)},
+    ]
+    vf = vendor_fix(db, task) if ev.purpose == "remediation" and not renewal else None
+    if vf:  # E6: the fix follows the vendor's instruction
+        rows.append({"check": "Vendor fix",
+                     "requires": f"{vf['product']} {vf['required']} or later (vendor's fixed release"
+                                 + (f" for {vf['current']}" if vf["current"] else "") + ")",
+                     "recorded": ev.observed_version or "—",
+                     "pass": bool(ev.observed_version) and E.vendor_fix_gap(ev.observed_version, vf["required"]) is None})
+    rows += [
         {"check": "Timestamp", "requires": f"Within scan validity · {validity} days",
          "recorded": ev.timestamp.strftime("%d %b %H:%M") if ev.timestamp else "—", "pass": age_ok},
         {"check": "Independence", "requires": "Reviewer differs from submitter and from whoever did the work",
          "recorded": f"{P(ev.submitter_id)} → {P(ev.reviewer_id) if ev.reviewer_id else 'unassigned'}",
          "pass": not indep},
     ]
-    return {"checks": rows, "all_pass": all(r["pass"] for r in rows), "reasons": ev.reasons,
+    return {"checks": rows, "all_pass": all(r["pass"] for r in rows), "reasons": ev.reasons, "vendor": vf,
             "examined": ev.scope or [], "needed_paths": renewal.evidence_scope if renewal else needed, "gaps": gaps,
             "component": task.component, "asset": asset.name, "renewal": bool(renewal),
             "claim": (f"“{renewal.statement}”" if renewal else

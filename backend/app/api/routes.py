@@ -229,6 +229,7 @@ def claims(claim_type: str | None = None, status: str | None = None, db=Depends(
         so = views.claim_signoffs(db, c)
         d["signoffs"] = ({"signed": sum(1 for s in so["signoffs"] if s["signed_by"]), "needed": len(so["signoffs"]),
                           "disputes": len(so["disputes"])} if so else None)
+        d["severity"] = views.claim_severity(db, c)
         out.append(d)
     return out
 
