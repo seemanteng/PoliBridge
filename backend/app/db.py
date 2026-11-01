@@ -30,6 +30,7 @@ def init_db(eng=None):
              "obligation": {"previous_quotation": "TEXT", "departments": "JSON", "supersedes_id": "INTEGER",
                             "superseded_reason": "TEXT", "source_version_id": "INTEGER"},
              "person": {"email": "TEXT"},
+             "asset": {"third_party_critical": "BOOLEAN DEFAULT 0"},
              "source": {"authority": "TEXT", "jurisdiction": "TEXT", "intake": "TEXT DEFAULT 'manual'",
                         "owner_id": "INTEGER", "review_days": "INTEGER", "status": "TEXT DEFAULT 'approved'",
                         "approved_at": "DATETIME", "proposed_by": "TEXT", "status_reason": "TEXT",

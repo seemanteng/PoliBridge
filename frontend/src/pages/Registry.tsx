@@ -135,14 +135,14 @@ function DeptModal({ dept, people, onClose }: { dept?: any; people: any[]; onClo
 function SystemModal({ system, name, people, units, onClose }: { system?: any; name?: string; people: any[]; units: any[]; onClose: () => void }) {
   const { run, error, busy } = useAction()
   const [f, setF] = useState({ name: system?.name || name || '', unit: system?.business_unit_id ? String(system.business_unit_id) : '', owner: '',
-    internet: !!system?.internet_facing, critical: !!system?.critical, customer: !!system?.customer_facing,
+    internet: !!system?.internet_facing, critical: !!system?.critical, customer: !!system?.customer_facing, thirdParty: !!system?.third_party_critical,
     sensitivity: system?.data_sensitivity || 'internal', roots: (system?.app_roots || []).join(', '), scanner: system ? system.in_scanner_targets : true })
   const set = (k: string, v: any) => setF({ ...f, [k]: v })
   const roots = String(f.roots).split(',').map((s: string) => s.trim()).filter(Boolean)
   const go = async () => {
     const ok = await run(async () => {
       const body = { name: f.name, business_unit_id: Number(f.unit), internet_facing: f.internet, critical: f.critical, customer_facing: f.customer,
-        data_sensitivity: f.sensitivity, app_roots: roots, in_scanner_targets: f.scanner }
+        third_party_critical: f.thirdParty, data_sensitivity: f.sensitivity, app_roots: roots, in_scanner_targets: f.scanner }
       if (system) {
         await api.patch(`/registry/assets/${system.id}/details`, body)
         if (f.owner) await api.post(`/registry/assets/${system.id}/owner`, { owner_id: Number(f.owner) })
@@ -168,7 +168,7 @@ function SystemModal({ system, name, people, units, onClose }: { system?: any; n
       <label>Data sensitivity</label>
       <select value={f.sensitivity} onChange={(e) => set('sensitivity', e.target.value)}>
         <option value="internal">Internal</option><option value="confidential">Confidential</option><option value="restricted">Restricted</option></select>
-      <div style={{ marginTop: 6 }}>{check('internet', 'Internet-facing')}{check('critical', 'Critical')}{check('customer', 'Customer-facing')}{check('scanner', 'Included in vulnerability scanner targets')}</div>
+      <div style={{ marginTop: 6 }}>{check('internet', 'Internet-facing')}{check('critical', 'Critical')}{check('customer', 'Customer-facing')}{check('thirdParty', 'Supplier-run or critical third-party dependency')}{check('scanner', 'Included in vulnerability scanner targets')}</div>
       <label>Application folders (comma separated)</label>
       <input value={f.roots} onChange={(e) => set('roots', e.target.value)} placeholder="/opt/payments, /srv/payments" />
       <p className="faint">Evidence must cover these folders to prove a fix or that software is absent.</p>
@@ -284,7 +284,7 @@ function System({ a, people, onEdit, restricted = false, focused = false }: { a:
     <details ref={details} id={`asset-${a.id}`} className={`card system-card ${focused ? 'focus-record' : ''}`}>
       <summary className="system-summary"><div className="system-summary-main"><h2><span className="chev">▸</span>{a.name}</h2>
         <div className="faint">{restricted ? <>{a.business_unit || 'no department'} · {a.owner || 'no named owner'}</> : <>
-          {[a.internet_facing && 'Internet-facing', a.critical && 'Critical', a.customer_facing && 'Customer-facing', a.data_sensitivity].filter(Boolean).join(' · ')}
+          {[a.internet_facing && 'Internet-facing', a.critical && 'Critical', a.customer_facing && 'Customer-facing', a.third_party_critical && 'Third-party', a.data_sensitivity].filter(Boolean).join(' · ')}
           {' · '}{a.owner || 'no named owner'} · {a.open_tasks.length} open task{a.open_tasks.length === 1 ? '' : 's'} · {a.claims.length} claim{a.claims.length === 1 ? '' : 's'}</>}</div></div>
         <div className="system-summary-actions">
           {a.attestation.state === 'due_soon' && <Badge kind="cd">attestation due soon</Badge>}

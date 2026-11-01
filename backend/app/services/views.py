@@ -481,7 +481,7 @@ def estate(db, ob: M.Obligation) -> dict:
     for r in rows:
         t = tasks.get(r["asset_id"])
         if t:
-            info = _classify(adv, db.get(M.Asset, r["asset_id"]), regulatory=ob.kind == "regulatory")
+            info = _classify(adv, db.get(M.Asset, r["asset_id"]), regulatory=ob.kind == "regulatory", db=db)
             if info["impact"] == "High":
                 why = info["triggers"]
                 break
@@ -501,7 +501,7 @@ def claim_severity(db, c: M.Claim) -> dict:
     a = db.get(M.Asset, c.asset_id) if c.asset_id else None
     adv = db.get(M.Advisory, ob.advisory_id) if ob and ob.advisory_id else None
     if adv is not None and a is not None:  # the advisory's impact on this system, as its task would be classified
-        info = _classify(adv, a, regulatory=ob.kind == "regulatory")
+        info = _classify(adv, a, regulatory=ob.kind == "regulatory", db=db)
         level, emergency = info["impact"], info["impact"] == "High" and info["emergency"]
         return {"level": level, "cvss": adv.cvss, "emergency": emergency,
                 "basis": ("Emergency · " if emergency else "") + f"{level} impact on {a.name}"

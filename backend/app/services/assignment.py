@@ -150,7 +150,7 @@ def retime_for_exploit(db, advisory, exploited_at):
         for t in db.scalars(select(Task).where(Task.obligation_id == ob.id, Task.status.in_(OPEN_STATES),
                                                Task.is_test == False)):  # noqa: E712
             asset = db.get(Asset, t.asset_id)
-            info = _classify(advisory, asset, regulatory=ob.kind == "regulatory")
+            info = _classify(advisory, asset, regulatory=ob.kind == "regulatory", db=db)
             if info["impact"] != "High" or not info["emergency"]:
                 continue
             due = exploited_at + timedelta(hours=TIMINGS["Emergency"]["remediate_hours"])

@@ -24,7 +24,7 @@ def _iso(d):
 
 
 # Per-system detail that describes the security posture rather than who owns it; left out for uncleared roles.
-SECURITY_FIELDS = ("app_roots", "internet_facing", "critical", "customer_facing", "data_sensitivity", "inventory",
+SECURITY_FIELDS = ("app_roots", "internet_facing", "critical", "customer_facing", "third_party_critical", "data_sensitivity", "inventory",
                    "in_scanner_targets", "components", "version_history", "updates_needed", "open_tasks", "claims")
 
 
@@ -102,8 +102,8 @@ def registry(db=Depends(get_db), security: bool = Depends(access.cleared)):
         out_assets.append({
             "id": a.id, "name": a.name, "business_unit_id": a.business_unit_id, "owner_id": a.owner_id,
             "app_roots": a.app_roots or [], "internet_facing": a.internet_facing, "critical": a.critical,
-            "customer_facing": a.customer_facing, "data_sensitivity": a.data_sensitivity,
-            "business_unit": bu.name if bu else None,
+            "customer_facing": a.customer_facing, "third_party_critical": a.third_party_critical,
+            "data_sensitivity": a.data_sensitivity, "business_unit": bu.name if bu else None,
             "owner": owner.name if owner else None, "owner_active": bool(owner and owner.active),
             "owner_valid": ok, "owner_issue": why or None, "legacy_contact": a.legacy_contact,
             "manager": name(owner.manager_id) if owner else None,
@@ -339,6 +339,7 @@ class SystemIn(BaseModel):
     internet_facing: bool = False
     critical: bool = False
     customer_facing: bool = False
+    third_party_critical: bool = False
     data_sensitivity: str = "internal"
     app_roots: list[str] = []
     in_scanner_targets: bool = True
@@ -350,6 +351,7 @@ class SystemPatch(BaseModel):
     internet_facing: bool | None = None
     critical: bool | None = None
     customer_facing: bool | None = None
+    third_party_critical: bool | None = None
     data_sensitivity: str | None = None
     app_roots: list[str] | None = None
     in_scanner_targets: bool | None = None
@@ -385,7 +387,7 @@ def add_system(body: SystemIn, db=Depends(get_db), me=Depends(actor)):
         raise HTTPException(400, "the owner must be an active person")
     a = M.Asset(name=name, business_unit_id=body.business_unit_id, owner_id=owner.id if owner else None,
                 internet_facing=body.internet_facing, critical=body.critical, customer_facing=body.customer_facing,
-                data_sensitivity=body.data_sensitivity, app_roots=_roots(body.app_roots),
+                third_party_critical=body.third_party_critical, data_sensitivity=body.data_sensitivity, app_roots=_roots(body.app_roots),
                 in_scanner_targets=body.in_scanner_targets)
     db.add(a)
     db.flush()
@@ -416,7 +418,8 @@ def edit_system(aid: int, body: SystemPatch, db=Depends(get_db), me=Depends(acto
     if "app_roots" in ch:
         ch["app_roots"] = _roots(ch["app_roots"])
     old_name = a.name
-    exposure_changed = any(k in ch and ch[k] != getattr(a, k) for k in ("internet_facing", "critical", "customer_facing"))
+    exposure_changed = any(k in ch and ch[k] != getattr(a, k) for k in ("internet_facing", "critical", "customer_facing",
+                                                                              "third_party_critical", "business_unit_id"))
     for k, v in ch.items():
         setattr(a, k, v)
     if a.name != old_name:  # evidence and discovery records match systems by name

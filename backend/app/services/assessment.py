@@ -19,10 +19,28 @@ def _active_claim(db, obligation_id, asset_id):
                                          Claim.asset_id == asset_id, Claim.status == "active"))
 
 
-def _classify(advisory: Advisory, asset: Asset, regulatory=False) -> dict:
+def affected_business_units(db, advisory: Advisory) -> int:
+    """Affected scope (Appendix B): departments with at least one system the advisory applies to or might apply to.
+    Cannot Determine counts, because a system that cannot be ruled out is still potentially affected."""
+    now, units = clock.now(), set()
+    for a in db.scalars(select(Asset)):
+        label, _ = A.assess_asset(
+            components=[{"name": c.name, "version": c.version, "conflict": c.conflict} for c in a.components],
+            inventory_verified_at=a.inventory_verified_at, inventory_scope=a.inventory_scope, app_roots=a.app_roots,
+            product=advisory.product, affected_specs=advisory.affected_versions, now=now,
+            stale_days=TIMINGS["component_data_stale_days"])
+        if label != A.DNA:
+            units.add(a.business_unit_id)
+    return len(units)
+
+
+def _classify(advisory: Advisory, asset: Asset, regulatory=False, db=None) -> dict:
+    """Pass db to include the affected-scope modifier; without it the scope is one department."""
     return I.classify(cvss=advisory.cvss, kev=advisory.kev, internet_facing=asset.internet_facing,
                       critical=asset.critical, data_sensitivity=asset.data_sensitivity,
                       customer_facing=asset.customer_facing, regulatory_trigger=regulatory,
+                      third_party_critical=bool(asset.third_party_critical),
+                      affected_bus=affected_business_units(db, advisory) if db is not None else 1,
                       threshold=TIMINGS["impact_modifier_threshold"])
 
 
@@ -80,7 +98,7 @@ def _sync_tasks(db, obligation, adv, asset, claim):
                                                        Guidance.status.in_(("released", "withheld")))):
                 g.status = "superseded"  # it described the system as it was recorded before
     if want and not any(t.kind == want and t.status in OPEN_STATES for t in open_tasks):
-        info = _classify(adv, asset, regulatory=obligation.kind == "regulatory")
+        info = _classify(adv, asset, regulatory=obligation.kind == "regulatory", db=db)
         if info["human_review"]:
             raise_finding(db, "impact_review", "Medium", f"{asset.name}: {adv.cve}",
                           f"Unknown criteria {info['unknown']}; classified conservatively",

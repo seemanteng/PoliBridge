@@ -145,7 +145,7 @@ def load_baseline(db, anchor: datetime | None = None):
     batch = asset("Batch reporting server", ramirez, T(D(2016, 1, 15)), "sbom", ["/srv/batch/**"],
                   [("jasperreports", "6.1.0", "/srv/batch/jasper")], app_roots=["/srv/batch"])
     hr = asset("HR payroll · vendor SaaS", ramirez, T(D(2017, 3, 1)), "vendor_sbom", ["/vendor/hr/**"],
-               [("rails", "4.2.7", "/vendor/hr/app")], internet_facing=True, data_sensitivity="confidential",
+               [("rails", "4.2.7", "/vendor/hr/app")], internet_facing=True, third_party_critical=True, data_sensitivity="confidential",
                app_roots=["/vendor/hr"], in_scanner_targets=False)  # vendor-hosted, left off the scanner list (B2)
     wiki = asset("Internal wiki", ramirez, T(D(2017, 3, 7)), "authenticated_scan", ["/srv/wiki/**"],
                  [("confluence", "5.9", "/srv/wiki/app")], app_roots=["/srv/wiki"])

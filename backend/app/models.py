@@ -42,6 +42,8 @@ class Asset(Base):
     internet_facing: Mapped[bool] = mapped_column(Boolean, default=False)
     critical: Mapped[bool] = mapped_column(Boolean, default=False)
     customer_facing: Mapped[bool] = mapped_column(Boolean, default=False)
+    # a supplier runs it or has access to its sensitive data, or it supports a critical service (impact rule C5)
+    third_party_critical: Mapped[bool] = mapped_column(Boolean, default=False)
     data_sensitivity: Mapped[str] = mapped_column(String, default="internal")  # internal|confidential|restricted
     business_unit_id: Mapped[int | None] = mapped_column(ForeignKey("business_unit.id"), nullable=True)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
