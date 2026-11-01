@@ -20,6 +20,30 @@ Low:
   interim_hours: null
   remediate_hours: 2160       # 90 days
 
+# Why each response window is set as it is. Shown on every task page next to its countdown, so a change to a number
+# above should come with a change to its reason here. External benchmarks: check them against the report's sources.
+rationale:
+  start: >-
+    Every countdown starts when PoliBridge matched the advisory to this system and created the task, not when the
+    vendor published it, and none of them is reset when the task is rerouted, transferred or disputed.
+  High:
+    acknowledge: >-
+      One working day for a named person to accept ownership, leaving time to reduce exposure inside the 48-hour
+      interim window. At Equifax the alert reached nobody; an acknowledgement proves it reached someone accountable.
+    interim: >-
+      If the vendor fix cannot be applied quickly, exposure must be reduced within 48 hours (a vendor workaround or
+      other compensating control) or the risk formally accepted. This keeps the 48-hour window of Equifax's own 2017
+      patching policy, which was never enforced.
+    remediate: >-
+      Seven days to apply and verify the vendor fix: inside the two weeks CISA BOD 22-01 allows for known-exploited
+      vulnerabilities, and tighter because the system is critical, exposed or holds sensitive data.
+  Medium:
+    acknowledge: Two days to accept ownership; no interim control is required at this impact.
+    remediate: Thirty days, in line with common practice for high-severity findings (e.g. CISA BOD 19-02).
+  Low:
+    acknowledge: Five working days to accept ownership.
+    remediate: Ninety days, aligned with a routine quarterly patch cycle.
+
 # Policy values used by other rules
 attestation_days: 91                # quarterly ownership attestation (B3)
 ownership_change_confirmation_days: 7  # new owner confirms within a week of a change

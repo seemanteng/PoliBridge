@@ -229,6 +229,64 @@ def task_timeline(db, t: M.Task) -> list[dict]:
     return out
 
 
+_WHO = {"manager": "the owner's manager", "ciso": "the CISO"}
+
+
+def _span(h: float) -> str:
+    return f"{int(h // 24)} days" if h > 48 and h % 24 == 0 else f"{h:g}h"
+
+
+def response_rules(db, t: M.Task) -> dict:
+    """Which response windows apply to this task, why, when they started and where each one stands (rules D1-D3)."""
+    cfg, why, now = TIMINGS[t.impact], (TIMINGS.get("rationale") or {}), clock.now()
+    reasons = why.get(t.impact) or {}
+    done = t.status in closure.TERMINAL
+    rows = []
+    # acknowledgement
+    ack_rule = f"{cfg['ack_hours']}h" if "ack_hours" in cfg else f"{cfg['ack_working_days']} working days"
+    ladder = ", then ".join(f"{_WHO.get(r['to'], r['to'])} at " +
+                            (f"{r['after_hours']}h" if "after_hours" in r else f"{r['after_working_days']} working days")
+                            for r in cfg.get("ack_escalations", []))
+    if t.acknowledged_at:
+        state = "met" if t.acknowledged_at <= t.ack_due else "late"
+        status = f"{'Met' if state == 'met' else 'Late'} · acknowledged after {hm(t.acknowledged_at - t.created_at)}"
+    else:
+        state = "missed" if now > t.ack_due else "running"
+        status = f"{'Missed' if state == 'missed' else 'Running'} · due {t.ack_due:%d %b %H:%M}"
+    rows.append({"key": "acknowledge", "step": "Acknowledge", "window": ack_rule, "due": t.ack_due.isoformat(),
+                 "state": state, "status": status, "if_missed": f"Escalates to {ladder}" if ladder else None,
+                 "why": reasons.get("acknowledge")})
+    # interim control (High only)
+    if t.interim_due:
+        ok = bool(t.interim_control) or db.scalar(select(M.RiskAcceptance.id).where(
+            M.RiskAcceptance.task_id == t.id, M.RiskAcceptance.status == "approved")) is not None
+        state = "met" if ok or done else "missed" if now > t.interim_due else "running"
+        rows.append({"key": "interim", "step": "Reduce exposure (interim control)", "window": _span(cfg["interim_hours"]),
+                     "due": t.interim_due.isoformat(), "state": state,
+                     "status": {"met": "Met · control or risk acceptance recorded" if ok else "Not needed · task closed",
+                                "missed": "Missed", "running": f"Running · due {t.interim_due:%d %b %H:%M}"}[state],
+                     "if_missed": "The CISO is told and an interim-control finding is raised",
+                     "why": reasons.get("interim")})
+    # remediation
+    if done:
+        on_time = bool(t.closed_at and t.closed_at <= t.remediate_due)
+        state = "met" if on_time else "late"
+        status = (f"{'Met' if on_time else 'Late'} · {t.status.replace('_', ' ')} {t.closed_at:%d %b}"
+                  if t.closed_at else "Closed")
+    else:
+        state = "missed" if is_overdue(t, now) else "running"
+        status = f"{'Missed' if state == 'missed' else 'Running'} · due {t.remediate_due:%d %b %H:%M}"
+    rows.append({"key": "remediate", "step": "Apply and verify the vendor fix", "window": _span(cfg["remediate_hours"]),
+                 "due": t.remediate_due.isoformat(), "state": state, "status": status,
+                 "if_missed": "Escalates to the risk owner and senior management, and into the board risk report",
+                 "why": reasons.get("remediate")})
+    ob = db.get(M.Obligation, t.obligation_id)
+    adv = db.get(M.Advisory, ob.advisory_id) if ob and ob.advisory_id else None
+    return {"impact": t.impact, "started": t.created_at.isoformat(),
+            "vendor_published": adv.published_at.isoformat() if adv and adv.published_at else None,
+            "start_note": why.get("start"), "rows": rows}
+
+
 def task_detail(db, t: M.Task) -> dict:
     a = db.get(M.Asset, t.asset_id)
     ob = db.get(M.Obligation, t.obligation_id)
@@ -270,9 +328,12 @@ def task_detail(db, t: M.Task) -> dict:
                               f"with scope {', '.join(renewal.evidence_scope or [])} and a timestamp after the renewal. "
                               "An independent reviewer must approve it; approved, time-limited risk acceptance is another disposition."
                               if renewal else f"A direct version check or authenticated scan whose recorded scope covers {t.component} on "
-                              f"{a.name}, accepted by an independent reviewer and signed off by both the asset owner (IT) "
+                              f"{a.name} and shows the vendor's fixed release or later, accepted by an independent reviewer and "
+                              "signed off by both the asset owner (IT) "
                               "and Information Security — or approved, time-limited risk acceptance."),
         "dispute": t.signoff_dispute or None,
+        "vendor": closure.vendor_fix(db, t) if not renewal else None,
+        "response_rules": response_rules(db, t),
         "record_sources": [{"key": k, "label": v} for k, v in closure.RECORD_SOURCES.items()],
         "current_evidence": (lambda e: {"id": e.id, "status": e.status, "purpose": e.purpose,
                                         "observed_version": e.observed_version} if e else None)(closure.current_evidence(db, t)),
@@ -351,6 +412,35 @@ def estate(db, ob: M.Obligation) -> dict:
             "timings": TIMINGS.get(ob.impact or "High", {})}
 
 
+SEVERITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, None: 3}
+
+
+def claim_severity(db, c: M.Claim) -> dict:
+    """Claims carry no severity of their own: it comes from what the claim is about. A claim tied to an obligation
+    takes that obligation's impact (rules C1-C6) and the advisory's CVSS; a claim about a system itself (ownership,
+    monitoring) takes the system's criticality and exposure."""
+    ob = db.get(M.Obligation, c.obligation_id) if c.obligation_id else None
+    a = db.get(M.Asset, c.asset_id) if c.asset_id else None
+    adv = db.get(M.Advisory, ob.advisory_id) if ob and ob.advisory_id else None
+    if adv is not None and a is not None:  # the advisory's impact on this system, as its task would be classified
+        level = _classify(adv, a, regulatory=ob.kind == "regulatory")["impact"]
+        return {"level": level, "cvss": adv.cvss,
+                "basis": f"{level} impact on {a.name}" + (f" · CVSS {adv.cvss:g}" if adv.cvss is not None else "")
+                         + (" · known exploited" if adv.kev else "")}
+    if ob and ob.impact:
+        return {"level": ob.impact, "cvss": None, "basis": f"{ob.impact} impact obligation"}
+    if a is None:
+        return {"level": None, "cvss": None, "basis": "Not tied to a system or obligation"}
+    sensitive = a.data_sensitivity in ("confidential", "restricted")
+    if a.critical or (a.internet_facing and sensitive):
+        level, why = "High", "critical system" if a.critical else "internet-facing with sensitive data"
+    elif a.internet_facing or sensitive or a.customer_facing:
+        level, why = "Medium", "internet-facing" if a.internet_facing else "sensitive data" if sensitive else "customer-facing"
+    else:
+        level, why = "Low", "internal system, no sensitive data"
+    return {"level": level, "cvss": None, "basis": f"System is {why}"}
+
+
 def claim_signoffs(db, c: M.Claim) -> dict | None:
     """For a claim that closed a task (C5): who signed it off for each function, and any disagreements on the way."""
     ev = db.scalar(select(M.Evidence).where(M.Evidence.claim_id == c.id))
@@ -408,6 +498,7 @@ def claim_detail(db, c: M.Claim) -> dict:
         "depends_on": ({"label": f"TLS certificate · {cert}", "expiry": c.expiry.isoformat() if c.expiry else None,
                         "expired": c.status == "expired"} if cert else None),
         "dependents": deps, "history": hist, "reason": c.reason, "closure": claim_signoffs(db, c),
+        "severity": claim_severity(db, c),
         "life": {"start": (c.evidence_ts or c.created_at).isoformat(), "end": c.expiry.isoformat() if c.expiry else None,
                  "now": clock.now().isoformat()},
     }

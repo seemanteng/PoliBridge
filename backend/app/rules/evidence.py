@@ -89,6 +89,17 @@ def check_evidence(*, purpose: str, task_asset: str, task_component: str | None,
     return reasons
 
 
+def vendor_fix_gap(observed_version: str | None, vendor_fix: str | None) -> str | None:
+    """E6: the fix must follow the vendor's instruction. The version the evidence observed must be at or above the
+    vendor's fixed release for the line the system runs. Being merely outside the affected range is not enough
+    (e.g. a downgrade, or an unreleased build)."""
+    if not observed_version or not vendor_fix:
+        return None
+    if versions._cmp(versions.parse(observed_version), versions.parse(vendor_fix)) < 0:
+        return f"E6: observed version {observed_version} is below the vendor's fixed release {vendor_fix}"
+    return None
+
+
 def check_reviewer(reviewer_id: int | None, submitter_id: int | None, fixed_by_id: int | None) -> list[str]:
     """E3: reviewer independent of whoever did the work."""
     if reviewer_id is None:

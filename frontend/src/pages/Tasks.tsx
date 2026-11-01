@@ -4,6 +4,7 @@ import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, TaskStatusPills, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
 import { SignoffCard } from './Signoffs'
+import { ResponseRules, VendorInstruction } from './TaskRules'
 import { GuidanceText } from './documents/Guidance'
 
 export function TaskList() {
@@ -87,7 +88,7 @@ export function TaskDetail() {
       </div>
 
       <div className="grid g21">
-        <div className="card"><h2>Routing and escalation</h2>
+        <div><div className="card"><h2>Routing and escalation</h2>
           <ul className="tl" style={{ marginTop: 6 }}>{t.timeline.map((e: any, i: number) => (
             <li key={i} className={e.tone}><span className="ts">{fmt(e.ts)}</span><div><div className="tt">{e.title}</div>
               {e.detail && <div className="muted" style={{ fontSize: 13 }}>{e.detail}</div>}</div></li>))}</ul>
@@ -96,6 +97,7 @@ export function TaskDetail() {
               <b>RA-{r.id}</b> · {r.status} · expires {fmt(r.expiry)}<p className="muted">{r.scenario} — controls: {r.controls}</p>
               {r.status === 'pending' && <button className="btn sm primary" onClick={() => act(`/risk-acceptances/${r.id}/approve`)}>Approve as authorised risk owner</button>}</div>))}</>}
         </div>
+        <ResponseRules t={t} /></div>
         <div>
           <div className="card"><h2>People</h2>
             <dl className="kv" style={{ marginTop: 10 }}>
@@ -108,6 +110,7 @@ export function TaskDetail() {
             {t.guidance[0].consult && <p className="faint" style={{ marginTop: 6 }}>{t.guidance[0].consulted_at ? `Checked by ${t.guidance[0].consult}` : `${t.guidance[0].consult} is checking it alongside`}</p>}</div>}
           <div className="card" style={{ marginTop: 14 }}><h2>To close this task</h2>
             <p className="muted" style={{ margin: '8px 0' }}>{t.close_requirement}</p>
+            {open && <VendorInstruction t={t} />}
             {t.renewal && <div className="note" style={{ marginBottom: 10 }}>
               <b>Renewal steps</b><ol style={{ margin: '6px 0 0', paddingLeft: 20 }}>
                 <li>Renew or recheck the control for {t.component} on {t.asset}.</li>
@@ -185,7 +188,7 @@ function EvidenceModal({ t, onClose }: { t: any; onClose: () => void }) {
       <option value="authenticated_scan">Authenticated scan</option><option value="direct_version_check">Direct version check</option>
       <option value="certificate_check">Certificate check</option><option value="configuration_review">Configuration review</option>
       <option value="sbom">SBOM</option><option value="unauthenticated_external_scan">Unauthenticated external scan</option></select>
-    {f.purpose === 'remediation' && !t.renewal && <><label>Observed version</label><input value={f.observed_version} onChange={(e) => set('observed_version', e.target.value)} placeholder="2.3.32" /></>}
+    {f.purpose === 'remediation' && !t.renewal && <><label>Observed version</label><input value={f.observed_version} onChange={(e) => set('observed_version', e.target.value)} placeholder={t.vendor ? `${t.vendor.required} or later (vendor fix)` : '2.3.32'} /></>}
     <label>Evidence generated at (blank = now)</label><input value={f.timestamp} onChange={(e) => set('timestamp', e.target.value)} placeholder="2017-03-15T10:48:00" />
     {error && <p className="err">{error}</p>}
     <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>Submit for review</button></div></Modal>
