@@ -655,6 +655,14 @@ def risk_list(db=Depends(get_db)):
     return sers(db.scalars(select(M.RiskAcceptance).order_by(M.RiskAcceptance.id.desc())))
 
 
+@router.post("/tasks/{tid}/resume-remediation")
+def resume_remediation(tid: int, db=Depends(get_db), me=Depends(actor)):
+    t = one(db, M.Task, tid)
+    owner = on_behalf(db, me, task_owner(db, t), "task", tid, "resume_remediation")
+    guarded(lambda: assignment.resume_after_risk_acceptance(db, t, owner))(db)
+    return task_view(db, db.get(M.Task, tid))
+
+
 @router.post("/risk-acceptances/{rid}/approve")
 def risk_approve(rid: int, db=Depends(get_db), me=Depends(actor)):
     ra = one(db, M.RiskAcceptance, rid)

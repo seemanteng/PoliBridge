@@ -239,7 +239,7 @@ class Claim(Base):
     reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)  # who is told on expiry
     expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="active")  # active|expired|rejected|superseded
+    status: Mapped[str] = mapped_column(String, default="active")  # active|expired|rejected|superseded|withdrawn
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -319,7 +319,7 @@ class RiskAcceptance(Base):
     approver_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     requested_by_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"), nullable=True)
     expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="pending")  # pending|approved|expired|rejected
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending|approved|expired|rejected|withdrawn
     claim_id: Mapped[int | None] = mapped_column(ForeignKey("claim.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

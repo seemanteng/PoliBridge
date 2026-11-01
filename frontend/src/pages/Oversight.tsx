@@ -43,7 +43,7 @@ async function relatedRecords(key: IssueKey, oversight: any): Promise<IssueItem[
   if (key === 'accepted_risks') {
     const risks = await api.get('/risk-acceptances')
     return risks.filter((r: any) => r.status === 'approved').map((r: any) =>
-      item(`Risk acceptance RA-${r.id}`, `Task ${r.task_id} · expires ${fmt(r.expiry, true)}`, `/remediations/${r.task_id}`))
+      item(`RA-${r.id} · Open linked remediation task`, `Task TSK-${String(r.task_id).padStart(4, '0')} · expires ${fmt(r.expiry, true)}`, `/remediations/${r.task_id}`))
   }
   return []
 }
@@ -151,16 +151,16 @@ function Dashboard({ tabs }: { tabs: ReactNode }) {
           k.failed_deliveries ? 'tone-danger' : 'tone-good')}
       </div>
 
-      <h2 className="oversight-group-title">Ownership &amp; approved exceptions</h2>
+      <h2 className="oversight-group-title">Ownership &amp; temporary exceptions</h2>
       <p className="oversight-section-note">Keep accountable owners current and review time-limited decisions.</p>
       <div className="grid oversight-cards oversight-cards-two">
         {kpi('ownership_confirmations', 'Systems needing owner confirmation', totalConfirmations,
           `${overdueConfirmations} overdue · ${awaitingConfirmations} awaiting${unscheduledConfirmations ? ` · ${unscheduledConfirmations} without a due date` : ''}`,
           'Counts systems whose owner has not completed a current confirmation. The total combines confirmations that are awaiting their due date, overdue, or missing a due date; use the status details to prioritize follow-up.',
           overdueConfirmations ? 'tone-danger' : totalConfirmations ? 'tone-warning' : 'tone-good')}
-        {kpi('accepted_risks', 'Approved risk exceptions', k.accepted_risks,
-          o.risk_expiring_soon ? `${o.risk_expiring_soon} expire within 7 days` : 'Time-limited exceptions currently in force',
-          'Counts approved risk acceptances that are still active. These are time-limited exceptions; review ones nearing expiry before they lapse.',
+        {kpi('accepted_risks', 'Temporary risk exceptions', k.accepted_risks,
+          o.risk_expiring_soon ? `${o.risk_expiring_soon} expire within 7 days` : 'Temporary approval, not a completed fix',
+          'Counts risks approved to remain unresolved for a limited time instead of being fixed immediately. Review the expiry and planned next action before the approval lapses.',
           o.risk_expiring_soon ? 'tone-warning' : '')}
       </div>
 
@@ -252,11 +252,11 @@ function BoardSummary({ onClose }: { onClose: () => void }) {
           <div className="oversight-board-columns">
             <section className="oversight-board-section">
               <div className="oversight-board-section-head">
-                <div><h3>Approved risk exceptions</h3><p>Time-limited approvals that leadership may want to review.</p></div>
+                <div><h3>Temporary risk exceptions</h3><p>Risks approved temporarily instead of being fixed immediately. Review the expiry and planned next action.</p></div>
                 <span className="oversight-board-count">{b.accepted_risks.length}</span>
               </div>
               {b.accepted_risks.length ? <ul className="oversight-board-list">{b.accepted_risks.map((r: any) => (
-                <li key={r.id}><Link to={`/remediations/${r.task}`} onClick={onClose}><b>RA-{r.id}</b> · Task TSK-{String(r.task).padStart(4, '0')}</Link>
+                <li key={r.id}><Link to={`/remediations/${r.task}`} onClick={onClose}><b>RA-{r.id}</b> · Open task TSK-{String(r.task).padStart(4, '0')}</Link>
                   <span>Expires {fmt(r.expiry, true)}</span></li>
               ))}</ul> : <p className="oversight-board-empty">No approved exceptions.</p>}
             </section>

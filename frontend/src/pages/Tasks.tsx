@@ -88,7 +88,7 @@ function Updates() {
   )
 }
 
-type Dlg = null | 'evidence' | 'risk' | 'reject' | 'interim'
+type Dlg = null | 'evidence' | 'risk' | 'reject' | 'interim' | 'resume'
 
 export function TaskDetail() {
   const { id } = useParams()
@@ -123,15 +123,17 @@ export function TaskDetail() {
       </div>
 
       <div className="grid g21">
-        <div><div className="card"><h2>Routing and escalation</h2>
+        <div>
+          <div className="card"><h2>Task history</h2>
           <ul className="tl" style={{ marginTop: 6 }}>{t.timeline.map((e: any, i: number) => (
             <li key={i} className={e.tone}><span className="ts">{fmt(e.ts)}</span><div><div className="tt">{e.title}</div>
               {e.detail && <div className="muted" style={{ fontSize: 13 }}>{e.detail}</div>}</div></li>))}</ul>
-          {myRisks.length > 0 && <><h2 style={{ marginTop: 14 }}>Risk acceptance</h2>{myRisks.map((r: any) => (
+          {myRisks.length > 0 && <><h2 style={{ marginTop: 14 }}>Temporary risk exception</h2>{myRisks.map((r: any) => (
             <div key={r.id} className="note" style={{ border: '1px solid var(--line)', marginTop: 8 }}>
               <b>RA-{r.id}</b> · {pretty(r.status)} · expires {fmt(r.expiry)}<p className="muted">{r.scenario} — controls: {r.controls}</p>
-              {r.status === 'pending' && <button className="btn sm primary" onClick={() => act(`/risk-acceptances/${r.id}/approve`)}>Approve as authorised risk owner</button>}</div>))}</>}
-        </div>
+              {r.status === 'pending' && <><p className="faint">An authorised Risk Owner, senior manager or CISO must approve. The requester and system owner cannot approve.</p>
+                <button className="btn sm primary" onClick={() => act(`/risk-acceptances/${r.id}/approve`)}>Approve temporary exception</button></>}</div>))}</>}
+          </div>
         <ResponseRules t={t} /></div>
         <div>
           <div className="card"><h2>People</h2>
@@ -158,16 +160,20 @@ export function TaskDetail() {
               {!t.ack.acknowledged && <button className="btn block" onClick={() => act(`/tasks/${t.id}/acknowledge`)}>Acknowledge</button>}
               {t.kind === 'remediation' && t.status !== 'fixed_pending_review' && <button className="btn block" onClick={() => act(`/tasks/${t.id}/fixed`)}>Mark fixed</button>}
               <button className="btn primary block" onClick={() => setDlg('evidence')}>Submit evidence</button>
-              <button className="btn block" onClick={() => setDlg('risk')}>Request risk acceptance</button>
+              <button className="btn block" onClick={() => setDlg('risk')}>Request temporary risk exception</button>
               {t.impact === 'High' && !t.interim.note?.startsWith('Web') && t.interim.state !== 'recorded' &&
                 <button className="btn block" onClick={() => setDlg('interim')}>Record interim control</button>}
               <button className="btn danger block" onClick={() => setDlg('reject')}>Reject — not my system</button>
               <p className="faint" style={{ marginTop: 8 }}>Rejecting reroutes the task immediately and raises an ownership finding. The deadline keeps running.</p></>}
+            {t.status === 'risk_accepted' && myRisks.some((r: any) => r.status === 'approved') && <div className="note" style={{ marginTop: 10 }}>
+              <b>Ready to fix it now?</b><p className="muted">End the temporary exception to reopen this task and resume remediation before it expires.</p>
+              <button className="btn sm primary" onClick={() => setDlg('resume')}>End exception &amp; resume remediation</button></div>}
             {aerr && <p className="err">{aerr}</p>}</div>
         </div>
       </div>
       {dlg === 'evidence' && <EvidenceModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'risk' && <RiskModal t={t} onClose={() => setDlg(null)} />}
+      {dlg === 'resume' && <ResumeRiskModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'reject' && <ReasonModal t={t} kind="reject" onClose={() => setDlg(null)} />}
       {dlg === 'interim' && <ReasonModal t={t} kind="interim" onClose={() => setDlg(null)} />}
     </>
@@ -191,13 +197,28 @@ function RiskModal({ t, onClose }: { t: any; onClose: () => void }) {
   const [f, setF] = useState({ scenario: '', controls: '', residual_risk: 'Medium', days: 14 })
   const { run, error, busy } = useAction()
   const go = async () => { if (await run(async () => { await api.post(`/tasks/${t.id}/risk-acceptance`, f); refreshAll() })) onClose() }
-  return <Modal title="Request risk acceptance" sub="Time-limited. An authorised risk owner other than you must approve; it reopens on expiry." onClose={onClose}>
+  return <Modal title="Request temporary risk exception" sub="Use this when a fix cannot happen right away. An authorised Risk Owner, senior manager or CISO must approve; the task reopens when the approval expires." onClose={onClose}>
     <label>Risk scenario</label><textarea rows={2} value={f.scenario} onChange={(e) => setF({ ...f, scenario: e.target.value })} />
     <label>Compensating controls</label><textarea rows={2} value={f.controls} onChange={(e) => setF({ ...f, controls: e.target.value })} />
     <label>Residual risk</label><select value={f.residual_risk} onChange={(e) => setF({ ...f, residual_risk: e.target.value })}><option>Low</option><option>Medium</option><option>High</option></select>
     <label>Expires in (days, max 90)</label><input type="number" value={f.days} onChange={(e) => setF({ ...f, days: Number(e.target.value) })} />
     {error && <p className="err">{error}</p>}
     <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !f.scenario || !f.controls} onClick={go}>Submit request</button></div></Modal>
+}
+
+function ResumeRiskModal({ t, onClose }: { t: any; onClose: () => void }) {
+  const { run, error, busy } = useAction()
+  const go = async () => {
+    if (await run(async () => { await api.post(`/tasks/${t.id}/resume-remediation`); refreshAll() })) onClose()
+  }
+  return <Modal title="Resume remediation now?"
+    sub="This ends the approved temporary exception and reopens the task immediately. The original remediation deadline stays in place, so the task may be overdue."
+    onClose={onClose}>
+    <p className="muted">You can continue fixing the issue, mark it fixed, and submit evidence for independent review. The exception will no longer cover the risk.</p>
+    {error && <p className="err">{error}</p>}
+    <div className="actions"><button className="btn" onClick={onClose}>Keep exception</button>
+      <button className="btn primary" disabled={busy} onClick={go}>End exception and resume</button></div>
+  </Modal>
 }
 
 function EvidenceModal({ t, onClose }: { t: any; onClose: () => void }) {

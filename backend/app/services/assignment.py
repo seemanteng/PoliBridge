@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from ..clock import clock, add_working_days
 from ..config import TIMINGS
-from ..models import Task, Asset, Person, Notification, RiskAcceptance, Obligation
+from ..models import Task, Asset, Person, Notification, RiskAcceptance, Obligation, Claim
 from . import audit
 from .common import (notify, raise_finding, first_with_role, people_with_role, bu_head,
                      owner_validity, create_claim, add_dependency)
@@ -266,6 +266,12 @@ def record_interim_control(db, task: Task, person: Person, description: str, rel
 # ---- risk acceptance (D4, D5) ----
 def request_risk_acceptance(db, task: Task, person: Person, *, scenario, controls, residual_risk,
                             days: int) -> RiskAcceptance:
+    if task.status not in OPEN_STATES:
+        raise ValueError("risk exceptions can only be requested for open work")
+    existing = db.scalar(select(RiskAcceptance.id).where(
+        RiskAcceptance.task_id == task.id, RiskAcceptance.status.in_(("pending", "approved"))))
+    if existing:
+        raise ValueError("this task already has a pending or approved risk exception")
     if not (scenario and controls and residual_risk):
         raise ValueError("risk acceptance needs scenario, controls and residual risk")
     ra = RiskAcceptance(task_id=task.id, scenario=scenario, controls=controls, residual_risk=residual_risk,
@@ -279,6 +285,8 @@ def request_risk_acceptance(db, task: Task, person: Person, *, scenario, control
 
 def approve_risk_acceptance(db, ra: RiskAcceptance, approver: Person):
     task = db.get(Task, ra.task_id)
+    if ra.status != "pending" or task.status not in OPEN_STATES:
+        raise ValueError("this risk exception is no longer awaiting approval")
     if approver.role not in ("risk_owner", "senior_mgmt", "ciso"):
         raise PermissionError("approver is not an authorised risk owner")
     if approver.id in (task.owner_id, ra.requested_by_id):
@@ -299,6 +307,35 @@ def approve_risk_acceptance(db, ra: RiskAcceptance, approver: Person):
     audit.log(db, approver.directory_id, "risk_acceptance", ra.id, "approved", expiry=str(ra.expiry))
     from .closure import try_close_obligation
     try_close_obligation(db, db.get(Obligation, task.obligation_id))
+
+
+def resume_after_risk_acceptance(db, task: Task, person: Person):
+    """End the accepted-risk disposition early and let the owner resume the original task."""
+    if task.owner_id != person.id:
+        raise PermissionError("only the task owner can resume remediation")
+    if task.status != "risk_accepted":
+        raise ValueError("this task does not have an active risk exception")
+
+    decisions = list(db.scalars(select(RiskAcceptance).where(
+        RiskAcceptance.task_id == task.id, RiskAcceptance.status.in_(("pending", "approved")))))
+    if not any(ra.status == "approved" for ra in decisions):
+        raise ValueError("there is no approved risk exception to end")
+
+    for ra in decisions:
+        was_approved = ra.status == "approved"
+        ra.status = "withdrawn"
+        claim = db.get(Claim, ra.claim_id) if ra.claim_id else None
+        if claim and claim.status == "active":
+            claim.status = "withdrawn"
+            claim.reason = "Risk exception ended early; remediation resumed."
+        audit.log(db, person.directory_id, "risk_acceptance", ra.id, "withdrawn", task=task.id,
+                  reason="remediation resumed early", was_approved=was_approved)
+
+    task.status, task.disposition, task.closed_at = "reopened", None, None
+    audit.log(db, person.directory_id, "task", task.id, "reopened", because="risk acceptance ended early")
+    from . import assurance
+    assurance._reopen_obligation(db, task.obligation_id)
+    return task
 
 
 def _sent(db, task: Task, kind: str) -> bool:

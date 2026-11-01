@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.clock import clock
 from app.models import Task, Claim, Finding, Notification, Evidence, AuditEvent, Obligation, CanaryRun, RiskAcceptance
-from app.services import intake, assignment, closure, assurance, assessment, registry
+from app.services import intake, assignment, closure, assurance, assessment, registry, views
 from .conftest import STRUTS, sign_required
 
 
@@ -117,6 +117,32 @@ def test_missed_deadline_and_risk_acceptance_reopen(db, who):
     assurance.sweep(db)
     assert t.status != "risk_accepted" and ra.status == "expired"                  # D5
     assert db.scalar(select(Notification).where(Notification.kind == "risk_acceptance_expired"))
+
+
+def test_owner_can_end_risk_acceptance_early_and_resume_remediation(db, who):
+    ob = intake.ingest_advisory(db, **STRUTS)
+    t = task_for(db, ob, "Credit Report Portal")
+    due = t.remediate_due
+    ra = assignment.request_risk_acceptance(db, t, who("atan"), scenario="Patch window blocked",
+                                            controls="WAF virtual patch", residual_risk="Medium", days=10)
+    assignment.approve_risk_acceptance(db, ra, who("rpark"))
+    claim = db.get(Claim, ra.claim_id)
+    assert t.status == "risk_accepted" and ra.status == "approved" and claim.status == "active"
+
+    ob.status, ob.closed_at = "closed", clock.now()
+    try:
+        assignment.resume_after_risk_acceptance(db, t, who("mlee"))
+        assert False, "only the task owner may resume remediation"
+    except PermissionError:
+        pass
+
+    assignment.resume_after_risk_acceptance(db, t, who("atan"))
+    assert t.status == "reopened" and t.disposition is None and t.closed_at is None
+    assert t.remediate_due == due  # resuming early does not silently reset the deadline
+    assert ra.status == "withdrawn" and claim.status == "withdrawn"
+    assert ob.status == "open" and ob.closed_at is None
+    assert any(e["title"] == "Temporary exception ended early — remediation resumed"
+               for e in views.task_timeline(db, t))
 
 
 def test_deadline_miss_goes_to_risk_owner_and_board(db, who):

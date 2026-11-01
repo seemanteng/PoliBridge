@@ -157,8 +157,10 @@ def oversight(db) -> dict:
 
 def task_timeline(db, t: M.Task) -> list[dict]:
     ev_ids = [e.id for e in db.scalars(select(M.Evidence).where(M.Evidence.task_id == t.id))]
+    risk_ids = [r.id for r in db.scalars(select(M.RiskAcceptance).where(M.RiskAcceptance.task_id == t.id))]
     q = select(M.AuditEvent).where(((M.AuditEvent.entity == "task") & (M.AuditEvent.entity_id == t.id)) |
-                                   ((M.AuditEvent.entity == "evidence") & (M.AuditEvent.entity_id.in_(ev_ids or [-1]))))
+                                   ((M.AuditEvent.entity == "evidence") & (M.AuditEvent.entity_id.in_(ev_ids or [-1]))) |
+                                   ((M.AuditEvent.entity == "risk_acceptance") & (M.AuditEvent.entity_id.in_(risk_ids or [-1]))))
     out = []
     for e in db.scalars(q.order_by(M.AuditEvent.id)):
         d, a = e.detail or {}, e.action
@@ -237,9 +239,25 @@ def task_timeline(db, t: M.Task) -> list[dict]:
         elif a == "signoff_dispute_resolved":
             title, detail = "Disagreement resolved", d.get("how")
         elif a == "reopened":
-            title, tone, detail = "Reopened", "lapse", d.get("because")
+            if d.get("because") == "risk acceptance expired":
+                title, tone, detail = "Temporary exception expired — task reopened", "lapse", "The accepted-risk period ended; remediation work needs attention again."
+            elif d.get("because") == "risk acceptance ended early":
+                continue  # the related risk-acceptance event below explains why the task reopened
+            else:
+                title, tone, detail = "Reopened", "lapse", d.get("because")
         elif a == "closed_superseded":
             title, detail = "Closed — applicability changed", f"Now {d.get('new_label')}"
+        elif e.entity == "risk_acceptance" and a in ("requested", "approved", "withdrawn"):
+            ra = db.get(M.RiskAcceptance, e.entity_id)
+            person = db.scalar(select(M.Person).where(M.Person.directory_id == e.actor))
+            actor = person.name if person else e.actor
+            expiry = f" · expires {ra.expiry:%d %b %Y}" if ra and ra.expiry else ""
+            if a == "requested":
+                title, detail = "Temporary exception requested", f"Requested by {actor}{expiry} · awaiting approval."
+            elif a == "approved":
+                title, detail = "Temporary exception approved", f"Approved by {actor}{expiry}."
+            else:
+                title, detail = "Temporary exception ended early — remediation resumed", f"Ended by {actor}{expiry}."
         if title:
             out.append({"ts": e.ts.isoformat(), "title": title, "detail": detail, "tone": tone})
     return out
@@ -535,7 +553,7 @@ def claim_detail(db, c: M.Claim) -> dict:
         elif dep.dependent_type == "risk_acceptance":
             r = db.get(M.RiskAcceptance, dep.dependent_id)
             deps.append({"kind": "risk_acceptance", "label": f"Risk acceptance RA-{r.id:04d} · {r.scenario[:40]}",
-                         "owner": _name(db, r.approver_id), "reopened": r.status == "expired"})
+                         "owner": _name(db, r.approver_id), "reopened": r.status in ("expired", "withdrawn")})
         elif dep.dependent_type == "board_item":
             b = db.get(M.BoardItem, dep.dependent_id)
             deps.append({"kind": "board_item", "label": f"Board report item {b.ref} · {b.title}",
