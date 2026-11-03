@@ -371,7 +371,7 @@ export function AdvisoryDetail() {
         <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / ADV-{String(o.id).padStart(4, '0')}</div>
         <div className="badges" style={{ marginTop: 8 }}>{o.impact && <ImpactBadge impact={o.impact} />}<Badge kind="info">Security advisory · fast path</Badge></div>
         <h1>{a.cve} · {a.product}</h1>
-        <p className="muted" style={{ maxWidth: 760 }}>Published {fmt(a.published_at, true)}, received {fmt(a.received_at || a.published_at, true)} from {(a.sources || []).map((x: any) => x.source).join(' and ') || 'an approved source'}, and matched against every system's component record at once. Advisories bypass the Compliance/Legal gate.</p>
+        <p className="muted" style={{ maxWidth: 760 }}>Reported {fmt(a.received_at || a.published_at, true)} by {(a.sources || []).map((x: any) => x.source).join(' and ') || 'an approved source'}. Checked against all systems at once. Skips Compliance/Legal review.</p>
       </div><button className="btn" onClick={() => setHist(true)}>Source &amp; version history</button></div>
 
       <div className="grid g2">
