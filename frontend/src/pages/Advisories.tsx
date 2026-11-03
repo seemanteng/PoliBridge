@@ -384,12 +384,12 @@ export function AdvisoryDetail() {
           </dl>
           {a.conflict && <div className="note fail" style={{ marginTop: 10 }}><b>Sources disagree on affected versions (A4)</b><p style={{ fontSize: 13 }}>{a.conflict} Compliance has a finding to decide which is right.</p></div>}
           {(a.sources || []).length > 1 && !a.conflict && <p className="faint" style={{ marginTop: 8 }}>{a.sources.length} approved sources reported this CVE. It is one obligation, so owners get one task, not {a.sources.length}.</p>}</div>
-        <div className="card"><div className="sec"><h2>Why High impact</h2><span className="faint">Appendix B</span></div>
+        <div className="card"><h2>Why High impact</h2>
           {est.why_high.length ? est.why_high.map((w: string) => <p key={w} style={{ padding: '3px 0' }}><span className="blue">✓</span> {w}{est.emergency && w.startsWith('C1') && <b className="red"> (Emergency)</b>}</p>) : <p className="muted">No decisive trigger.</p>}
           <div className="grid g3" style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10, gap: 8 }}>
             <div><div className="faint">Acknowledge</div><b>{t.ack_hours ? `${t.ack_hours}h` : `${t.ack_working_days} working days`}</b></div>
             <div><div className="faint">Interim control</div><b>{t.interim_hours ? `${t.interim_hours}h` : 'Not required'}</b></div>
-            <div><div className="faint">Remediate</div><b>{t.remediate_hours / 24} days</b></div>
+            <div><div className="faint">Remediate</div><b>{t.remediate_hours <= 48 ? `${t.remediate_hours}h` : `${t.remediate_hours / 24} days`}</b></div>
           </div>
           {o.security_review && <SecurityReview o={o} />}</div>
       </div>
