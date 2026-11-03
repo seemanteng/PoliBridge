@@ -81,7 +81,7 @@ export function AdvisoryList() {
     <tr key={r.key}>
       <td>{r.scope}{r.kind === 'Advisory' && <div className="faint">{r.department}</div>}</td>
       <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}</td>
-      {r.kind === 'Advisory' && <td>{r.impact ? <ImpactBadge impact={r.impact} short /> : <span className="faint">—</span>}</td>}
+      {r.kind === 'Advisory' && <td>{r.impact ? <ImpactBadge impact={r.impact} emergency={r.emergency} short /> : <span className="faint">—</span>}</td>}
       <td><LabelBadge label={r.label} /></td>
       <td>{r.status === 'signed' ? <><Badge kind="info">✓ Signed off</Badge><div className="faint">{r.signed_by} · {fmt(r.signed_at)}{r.entered_by && <> · entered by {r.entered_by}</>}</div></>
         : r.status === 'overdue' ? <><Badge kind="over">Overdue</Badge>{r.escalated_to && <div className="faint">escalated to {r.escalated_to}</div>}</>
@@ -288,7 +288,6 @@ function SecurityReview({ o }: { o: any }) {
   const send = (confirm: boolean) => run(async () => { await api.post(`/obligations/${o.id}/security-review`, { confirm, note }); refreshAll() })
   return (
     <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
-      <div className="faint">Security review (C1) · runs alongside the owners' work, never holds it up</div>
       {r.status === 'waiting' && <><p style={{ margin: '4px 0' }}>Waiting for {r.reviewer || 'the CISO'} to confirm the High rating.</p>
         <div style={{ display: 'flex', gap: 6 }}><button className="btn sm primary" disabled={busy} onClick={() => send(true)}>Confirm High (as {(r.reviewer || 'CISO').split(' ')[0]})</button>
           <button className="btn sm" onClick={() => setAsking(true)}>Question the rating</button></div></>}
@@ -369,9 +368,9 @@ export function AdvisoryDetail() {
     <>
       <div className="head"><div>
         <div className="crumbs"><Link to="/acknowledgements">Acknowledgements</Link> / ADV-{String(o.id).padStart(4, '0')}</div>
-        <div className="badges" style={{ marginTop: 8 }}>{o.impact && <ImpactBadge impact={o.impact} />}<Badge kind="info">Security advisory · fast path</Badge></div>
+        <div className="badges" style={{ marginTop: 8 }}>{o.impact && <ImpactBadge impact={o.impact} emergency={est.emergency} />}<Badge kind="info">Security advisory · fast path</Badge></div>
         <h1>{a.cve} · {a.product}</h1>
-        <p className="muted" style={{ maxWidth: 760 }}>Reported {fmt(a.received_at || a.published_at, true)} by {(a.sources || []).map((x: any) => x.source).join(' and ') || 'an approved source'}. Checked against all systems at once. Skips Compliance/Legal review.</p>
+        <p className="muted" style={{ maxWidth: 760 }}>Reported {fmt(a.received_at || a.published_at, true)} by {(a.sources || []).map((x: any) => x.source).join(' and ') || 'an approved source'}.</p>
       </div><button className="btn" onClick={() => setHist(true)}>Source &amp; version history</button></div>
 
       <div className="grid g2">
@@ -386,7 +385,7 @@ export function AdvisoryDetail() {
           {a.conflict && <div className="note fail" style={{ marginTop: 10 }}><b>Sources disagree on affected versions (A4)</b><p style={{ fontSize: 13 }}>{a.conflict} Compliance has a finding to decide which is right.</p></div>}
           {(a.sources || []).length > 1 && !a.conflict && <p className="faint" style={{ marginTop: 8 }}>{a.sources.length} approved sources reported this CVE. It is one obligation, so owners get one task, not {a.sources.length}.</p>}</div>
         <div className="card"><div className="sec"><h2>Why High impact</h2><span className="faint">Appendix B</span></div>
-          {est.why_high.length ? est.why_high.map((w: string) => <p key={w} style={{ padding: '3px 0' }}><span className="blue">✓</span> {w}</p>) : <p className="muted">No decisive trigger.</p>}
+          {est.why_high.length ? est.why_high.map((w: string) => <p key={w} style={{ padding: '3px 0' }}><span className="blue">✓</span> {w}{est.emergency && w.startsWith('C1') && <b className="red"> (Emergency)</b>}</p>) : <p className="muted">No decisive trigger.</p>}
           <div className="grid g3" style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10, gap: 8 }}>
             <div><div className="faint">Acknowledge</div><b>{t.ack_hours ? `${t.ack_hours}h` : `${t.ack_working_days} working days`}</b></div>
             <div><div className="faint">Interim control</div><b>{t.interim_hours ? `${t.interim_hours}h` : 'Not required'}</b></div>

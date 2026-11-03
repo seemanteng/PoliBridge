@@ -467,7 +467,7 @@ def estate(db, ob: M.Obligation) -> dict:
                            f" · {a.inventory_verified_at:%d %b %Y}") if a.inventory_verified_at else None,
             "stale": stale, "state": c.value, "basis": basis, "claim_id": c.id,
             "task_id": t.id if t else None, "task_ref": task_label(t) if t else None, "task_status": t_status,
-            "task_overdue": bool(t and is_overdue(t)),
+            "task_overdue": bool(t and is_overdue(t)), "emergency": bool(t and t.emergency),
         })
     counts = {"applies": sum(r["state"] == "applies" for r in rows),
               "cannot_determine": sum(r["state"] == "cannot_determine" for r in rows),
@@ -484,9 +484,10 @@ def estate(db, ob: M.Obligation) -> dict:
             if info["impact"] == "High":
                 why = info["triggers"]
                 break
-    return {"rows": rows, "counts": counts, "gate": {"total": len(rows), "approved": approved, "in_review": review,
+    emergency = any(r["emergency"] for r in rows)  # any task on this advisory runs on the Emergency timings
+    return {"rows": rows, "counts": counts, "emergency": emergency, "gate": {"total": len(rows), "approved": approved, "in_review": review,
                                                     "cannot_determine": counts["cannot_determine"]}, "why_high": why,
-            "timings": TIMINGS.get(ob.impact or "High", {})}
+            "timings": TIMINGS.get("Emergency" if emergency else ob.impact or "High", {})}
 
 
 SEVERITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, None: 3}

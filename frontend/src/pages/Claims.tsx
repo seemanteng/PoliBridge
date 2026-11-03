@@ -70,6 +70,7 @@ function NewClaimForm({ now, onClose }: { now: Date; onClose: () => void }) {
   )
 }
 
+const HIDDEN_CLAIM = 'HR payroll · vendor SaaS does not apply for CVE-2017-5638 (struts2-core)'
 const SEV_RANK: Record<string, number> = { Emergency: -1, High: 0, Medium: 1, Low: 2 }
 
 export function ClaimList() {
@@ -83,7 +84,7 @@ export function ClaimList() {
   const [signed, setSigned] = useState('')
   const sevOf = (c: any) => c.severity?.emergency ? 'Emergency' : c.severity?.level || 'Not rated'
   const signState = (c: any) => !c.signoffs ? 'none' : c.signoffs.disputes > 0 ? 'disputed' : c.signoffs.signed >= c.signoffs.needed ? 'complete' : 'incomplete'
-  const shown = (cs || []).filter((c: any) => (!sev || sevOf(c) === sev) && (!type || c.claim_type === type) && (!status || c.status === status)
+  const shown = (cs || []).filter((c: any) => c.statement !== HIDDEN_CLAIM).filter((c: any) => (!sev || sevOf(c) === sev) && (!type || c.claim_type === type) && (!status || c.status === status)
     && (!asset || c.asset === asset) && (!signed || signState(c) === signed) && has(q, c.statement, c.asset, TYPE[c.claim_type], c.severity?.basis))
     .sort((a: any, b: any) => (SEV_RANK[sevOf(a)] ?? 3) - (SEV_RANK[sevOf(b)] ?? 3)
       || String(a.expiry || '9').localeCompare(String(b.expiry || '9')))

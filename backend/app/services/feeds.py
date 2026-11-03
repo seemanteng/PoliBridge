@@ -220,13 +220,14 @@ def summary(db, src: Source) -> dict:
     systems, waiting, cves = set(), 0, []
     for adv, at in advs:
         ob = db.scalar(select(Obligation).where(Obligation.advisory_id == adv.id))
-        affected = 0
+        affected, emergency = 0, False
         for t in db.scalars(select(Task).where(Task.obligation_id == ob.id, Task.status.in_(OPEN_STATES))):
             systems.add(t.asset_id)
             waiting += t.acknowledged_at is None
             affected += 1
+            emergency = emergency or bool(t.emergency)
         # each alert names every feed that reported it, so a CVE sent by two feeds can be shown as one alert
-        cves.append({"obligation_id": ob.id, "cve": adv.cve, "product": adv.product, "impact": ob.impact,
+        cves.append({"obligation_id": ob.id, "cve": adv.cve, "product": adv.product, "impact": ob.impact, "emergency": emergency,
                      "received_at": at.isoformat(), "new": now - at < timedelta(hours=NEW_HOURS),
                      "systems_affected": affected, "conflict": adv.conflict,
                      "reported_by": [{"source": e["source"], "received_at": e["received_at"]} for e in adv.sources or []]

@@ -158,7 +158,7 @@ export default function Sources() {
             {combined.map((a) => (
               <tr key={a.obligation_id}>
                 <td><Link to={`/acknowledgements/${a.obligation_id}`}><b className="mono">{a.cve}</b></Link> · {a.product}
-                  {a.new && <> <Badge kind="info">New</Badge></>} {a.impact && <ImpactBadge impact={a.impact} short />}
+                  {a.new && <> <Badge kind="info">New</Badge></>} {a.impact && <ImpactBadge impact={a.impact} emergency={a.emergency} short />}
                   {a.conflict && <div className="faint red" style={{ maxWidth: 360 }}>Feeds disagree: {a.conflict}</div>}</td>
                 <td>{a.reported_by.length > 1 && <Badge kind="ok">Same alert · {a.reported_by.length} feeds</Badge>}
                   {a.reported_by.map((r: any) => (
