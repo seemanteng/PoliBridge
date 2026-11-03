@@ -6,9 +6,6 @@ import { has } from '../filterUtils'
 import { NewVersionModal } from './documents/NewVersion'
 import { GuidanceText, WriteGuidanceModal } from './documents/Guidance'
 
-// Kept out of this page's view so the ACIS failure stays the focus
-const HIDDEN_SYSTEM = 'Batch reporting server'
-
 const LABEL: Record<string, string> = { applies: 'Applies', does_not_apply: 'Does Not Apply', cannot_determine: 'Cannot Determine' }
 const LABEL_KIND: Record<string, string> = { applies: 'lbl-applies', does_not_apply: 'lbl-dna', cannot_determine: 'lbl-cd' }
 const LabelBadge = ({ label }: { label: string }) => <Badge kind={LABEL_KIND[label]}>{LABEL[label] || label}</Badge>
@@ -365,7 +362,6 @@ export function AdvisoryDetail() {
       {writing && <WriteGuidanceModal g={writing} onClose={() => setWriting(null)} />}
     </>)
   const a = o.advisory, est = o.estate
-  const rows = est.rows.filter((r: any) => r.asset !== HIDDEN_SYSTEM)
   const t = est.timings
   const g = est.gate
   const pct = (n: number) => `${(n / Math.max(1, g.total)) * 100}%`
@@ -403,10 +399,10 @@ export function AdvisoryDetail() {
         <div className="sec"><div><h2>Applicability across all systems</h2>
           <p className="muted">Missing or stale data becomes Cannot Determine — never Does Not Apply.</p></div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <Badge kind="lbl-applies">{rows.filter((r: any) => r.state === 'applies').length} Applies</Badge><Badge kind="lbl-cd">{rows.filter((r: any) => r.state === 'cannot_determine').length} Cannot Determine</Badge><Badge kind="lbl-dna">{rows.filter((r: any) => r.state === 'does_not_apply').length} Does Not Apply</Badge></div></div>
+            <Badge kind="lbl-applies">{est.counts.applies} Applies</Badge><Badge kind="lbl-cd">{est.counts.cannot_determine} Cannot Determine</Badge><Badge kind="lbl-dna">{est.counts.does_not_apply} Does Not Apply</Badge></div></div>
         <table>
           <thead><tr><th>System</th><th>Owner</th><th>Impact</th><th>Component record</th><th>State</th><th>Basis</th><th>Task</th></tr></thead>
-          <tbody>{rows.map((r: any) => (
+          <tbody>{est.rows.map((r: any) => (
             <tr key={r.asset_id} className={r.state === 'cannot_determine' ? 'hl' : ''}>
               <td><b>{r.asset}</b><div className="faint">{r.tags}</div></td>
               <td>{r.owner ? <span style={r.owner_active ? {} : { color: 'var(--red)', textDecoration: 'line-through' }}>{r.owner}</span> : <span className="red">no owner</span>}
@@ -457,7 +453,7 @@ export function AdvisoryDetail() {
       </div>
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Guidance sent to each system</h2>
-        {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded' && x.asset !== HIDDEN_SYSTEM).map((x: any) => {
+        {o.guidance.filter((x: any) => x.asset && x.status !== 'superseded').map((x: any) => {
           const lines: string[] = (x.text || '').replace(/^For the [^:]*:\s*/, '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/)
             .map((l: string) => l.replace(/^(What we know|The fix|What you need to do):\s*/, '').trim()).filter(Boolean)
           const todo = lines.filter((l) => /\b(must|scan|patch|submit|upgrade|provide)\b/i.test(l))

@@ -38,7 +38,7 @@ MOCK_FEED = [
         kev=False, fixed_version="2.3.32, 2.5.10.1",
         description="S2-045: possible remote code execution when performing file upload based on the Jakarta "
                     "Multipart parser. Maximum security rating: Critical.")),
-    ("CISA/NVD", 5, 30, dict(
+    ("CISA/NVD", 3, 30, dict(
         cve="CVE-2017-5638", product="struts2-core", affected_versions=[">=2.3.5 <2.3.32", ">=2.5.0 <2.5.10.1"],
         cvss=10.0, kev=True, fixed_version="2.3.32, 2.5.10.1", description=STRUTS_NVD)),
     ("Atlassian security advisories", 7, 45, dict(

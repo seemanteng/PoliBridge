@@ -28,22 +28,21 @@ def test_replay_end_state(rdb):
     db = rdb
     assert clock.now() == datetime(2017, 3, 15, 14, 20)
     o = views.oversight(db)
-    assert o["banner"]["text"].startswith("obligation cannot close: 2 assets remain Cannot Determine")
+    assert o["banner"]["text"].startswith("obligation cannot close: 1 assets remain Cannot Determine")
     assert [r["ref"] for r in o["overdue"]][0].startswith("TSK-")
     acis = o["overdue"][0]
     assert "Risk owner" in acis["escalated_to"] and acis["owner_note"] == "rerouted · BU head"
     assert o["canary_failure"]["asset"].startswith("ACIS") and o["kpis"]["lapsed_monitoring"] == 1
-    assert o["kpis"]["canary"]["runs"] == 3 and o["kpis"]["canary"]["passed"] == 2
+    assert o["kpis"]["canary"]["runs"] == 2 and o["kpis"]["canary"]["passed"] == 1
 
 
 def test_replay_estate_matches_advisory_page(rdb):
     db = rdb
     ob = db.scalar(select(Obligation).where(Obligation.kind == "advisory", Obligation.is_test == False))  # noqa: E712
     est = views.estate(db, ob)
-    assert est["counts"] == {"applies": 2, "cannot_determine": 2, "does_not_apply": 2}
+    assert est["counts"] == {"applies": 2, "cannot_determine": 1, "does_not_apply": 2}
     by = {r["asset"].split(" ·")[0]: r for r in est["rows"]}
     assert by["ACIS"]["state"] == "cannot_determine" and "rejected" in by["ACIS"]["basis"]
-    assert by["Batch reporting server"]["stale"] and by["Batch reporting server"]["state"] == "cannot_determine"
     assert by["Credit File API"]["task_status"].startswith("Remediated")
     assert by["Member portal"]["task_status"].startswith("Fixed")
     assert est["gate"]["approved"] == 3 and est["gate"]["in_review"] == 1

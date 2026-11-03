@@ -142,19 +142,17 @@ def load_baseline(db, anchor: datetime | None = None):
         mp = asset("Member portal", kowalski, T(D(2017, 3, 6)), "sca", ["/opt/member/**"],
                    [("struts2-core", "2.5.8", "/opt/member/webapps/struts")], internet_facing=True, critical=True,
                    customer_facing=True, data_sensitivity="confidential", app_roots=["/opt/member"])
-    batch = asset("Batch reporting server", ramirez, T(D(2016, 1, 15)), "sbom", ["/srv/batch/**"],
-                  [("jasperreports", "6.1.0", "/srv/batch/jasper")], app_roots=["/srv/batch"])
     hr = asset("HR payroll · vendor SaaS", ramirez, T(D(2017, 3, 1)), "vendor_sbom", ["/vendor/hr/**"],
                [("rails", "4.2.7", "/vendor/hr/app")], internet_facing=True, third_party_critical=True, data_sensitivity="confidential",
                app_roots=["/vendor/hr"], in_scanner_targets=False)  # vendor-hosted, left off the scanner list (B2)
     wiki = asset("Internal wiki", ramirez, T(D(2017, 3, 7)), "authenticated_scan", ["/srv/wiki/**"],
                  [("confluence", "5.9", "/srv/wiki/app")], app_roots=["/srv/wiki"])
     db.add_all([DiscoveredAsset(name=a.name, source="network", internet_facing=a.internet_facing)
-                for a in (acis, cf, mp, batch, hr, wiki) if a])
+                for a in (acis, cf, mp, hr, wiki) if a])
     # seen by discovery but never registered (B1): a public endpoint someone stood up, and an internal database
     db.add_all([DiscoveredAsset(name="dispute-api.shadow.example", source="dns", internet_facing=True),
                 DiscoveredAsset(name="acis-reporting-db02", source="network", internet_facing=False)])
-    for a in (cf, mp, batch, hr, wiki if not live else None):
+    for a in (cf, mp, hr, wiki if not live else None):
         if a:
             registry.attest_ownership(db, a, db.get(Person, a.owner_id))
     if live:  # the wiki was last attested in mid-December, so its quarterly re-attestation is due soon (B3)
@@ -193,8 +191,7 @@ def load_baseline(db, anchor: datetime | None = None):
     lists = {acis: [("dwhitfield", "Department head"), ("kosei", "Network security"), ("jpark", "Security analyst"),
                     ("mlin", "Compliance"), ("rokafor", "Former owner")],
              hr: [("sramirez", "System owner"), ("mlin", "Compliance"), ("lmarsh", "Legal: payroll data")],
-             wiki: [("sramirez", "System owner"), ("jpark", "Security analyst")],
-             batch: [("sramirez", "System owner"), ("dwhitfield", "Department head")]}
+             wiki: [("sramirez", "System owner"), ("jpark", "Security analyst")]}
     for a, members in lists.items():
         for did, stake in members:
             db.add(MailingListMember(asset_id=a.id, person_id=P(db, did).id, stake=stake, added_by="dwhitfield",
@@ -218,9 +215,6 @@ def run_storyline(db):
     me = lambda d: P(db, d)  # noqa: E731
     asset = lambda name: db.scalar(select(Asset).where(Asset.name.like(name + "%")))  # noqa: E731
 
-    # 28 Feb - 1 Mar: scheduled canary on the batch server is never acknowledged; escalation fires on time
-    assurance.run_canary(db, asset("Batch reporting"))
-    _at(db, D(2017, 3, 1, 10, 0))
     # 6 Mar: routing-rule change triggers a canary on the member portal; acknowledged after 5h42m
     clock.set(D(2017, 3, 6, 7, 0))
     run = assurance.run_canary(db, asset("Member portal"))
@@ -242,7 +236,6 @@ def run_storyline(db):
     clock.set(D(2017, 3, 8, 11, 0))
     assignment.acknowledge(db, tasks["Credit File API"], me("madeyemi"))
     assignment.acknowledge(db, tasks["Member portal"], me("hkowalski"))
-    assignment.acknowledge(db, tasks["Batch reporting server"], me("sramirez"))
     # 8 Mar 13:12: ACIS's fallback owner has not acknowledged after 4 hours -> the manager is told (D1)
     _at(db, D(2017, 3, 8, 13, 13))
     clock.set(D(2017, 3, 8, 16, 5))
