@@ -80,7 +80,7 @@ export function TaskDetail() {
         {t.kind === 'investigation' && <Badge kind="lbl-cd">Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
         <TaskStatusPills status={t.status} overdue={t.overdue} /></div>
       <h1>{t.title}</h1>
-      <p className="muted" style={{ maxWidth: 780 }}>{t.summary}</p>
+      {t.summary && <p className="muted" style={{ maxWidth: 780 }}>{t.summary}</p>}
 
       <div className="grid g21" style={{ alignItems: 'stretch' }}>
       <div className="grid g3" style={{ marginTop: 0 }}>

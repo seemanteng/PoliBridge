@@ -380,9 +380,7 @@ def task_detail(db, t: M.Task) -> dict:
         "overdue": is_overdue(t, now),
         "summary": (f"The evidence for “{renewal.statement}” expired. Renew the certificate or configuration, "
                     f"then verify {t.component} on {a.name} and submit new evidence for independent review." if renewal else
-                    f"{a.name} has no verified component data for {t.component}, so PoliBridge cannot rule it in or out. "
-                    "Supply component-scoped evidence, or remediate, or request time-limited risk acceptance."
-                    if t.kind == "investigation" else
+                    "" if t.kind == "investigation" else
                     f"Patch {t.component} on {a.name}, then submit evidence for independent review."),
         "ack": {"due_h": policy(t).get("ack_hours"), "acknowledged": bool(t.acknowledged_at),
                 "at": t.acknowledged_at.isoformat() if t.acknowledged_at else None,
