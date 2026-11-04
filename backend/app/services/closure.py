@@ -184,7 +184,7 @@ def _complete_remediation(db, task: Task, ev: Evidence, reviewer: Person):
 DUAL = ("system_owner", "security")  # IT confirms the component record; Information Security confirms coverage
 SIGNOFF_ROLE = {"security": "ciso", "compliance": "compliance", "legal": "legal"}
 SIGNOFF_LABEL = {"system_owner": "System owner (IT)", "security": "Information Security",
-                 "compliance": "Compliance (C3/C4)", "legal": "Legal (C4)"}
+                 "compliance": "Compliance", "legal": "Legal"}
 SIGNOFF_CONFIRMS = {"system_owner": "The system's component record matches what the evidence says",
                     "security": "The verification examined the affected component",
                     "compliance": "Closure meets the compliance obligation", "legal": "Closure meets the legal obligation"}

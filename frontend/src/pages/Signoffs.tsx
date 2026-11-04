@@ -10,22 +10,35 @@ type Signoff = { key: string; label: string; dual: boolean; confirms: string; si
 
 const first = (name: string | null) => (name || '').split(' ')[0]
 
-export function SignoffCard({ t }: { t: any }) {
+export function PeopleCard({ t }: { t: any }) {
   const [dlg, setDlg] = useState<null | { kind: 'record' | 'dispute'; s: Signoff }>(null)
   const { run, error, busy } = useAction()
   const open = ['open', 'reopened', 'fixed_pending_review'].includes(t.status)
   const ev = t.current_evidence
   const d = t.dispute
   const disputed = d && !d.resolved_at
-  const signs: Signoff[] = t.signoffs
-  const extra = signs.filter((s) => !s.dual)
+  const signs: Signoff[] = t.signoffs || []
+  const ownerSign = signs.find((s) => s.key === 'system_owner')
+  const otherSigns = signs.filter((s) => s.key !== 'system_owner')
   const sign = (s: Signoff) => run(async () => { await api.post(`/tasks/${t.id}/review-signoff`, { role: s.key }); refreshAll() })
+  const status = (s: Signoff) => <>
+    {s.signed_by && <div><Badge kind="info">✓ Signed</Badge><div className="faint">{s.signed_by} · {fmt(s.signed_at)}
+      {s.record_source && <> · record shows {s.record_version || 'not present'} ({s.record_source})</>}</div></div>}
+    {!s.signed_by && open && ev && s.signer && <div className="signoff-actions" style={{ marginTop: 6 }}>
+      <button className="btn sm" disabled={busy} onClick={() => s.key === 'system_owner' ? setDlg({ kind: 'record', s }) : sign(s)}>
+        {s.key === 'system_owner' ? `Confirm record as ${first(s.signer)}` : `Sign as ${first(s.signer)}`}</button>
+      <button className="btn sm danger" disabled={busy} onClick={() => setDlg({ kind: 'dispute', s })}>Disagree</button></div>}
+  </>
   return (
-    <div className="card" style={{ marginTop: 14 }}>
-      <h2>Remediation sign-offs</h2>
-      <p className="muted" style={{ margin: '6px 0' }}>Two functions must agree before this closes: the <b>system owner (IT)</b> confirms the
-        system's component record, and <b>Information Security</b> confirms the check covered the component.
-        {extra.length > 0 && <> This system's impact also needs {extra.map((s) => s.label).join(' and ')}.</>}</p>
+    <div className="card">
+      <h2>People</h2>
+      <dl className="kv" style={{ marginTop: 10 }}>
+        <dt>Owner</dt><dd><b>{t.people.owner?.name}</b><div className="faint">{t.people.owner?.title}</div>{ownerSign && status(ownerSign)}</dd>
+        <dt>Manager</dt><dd>{t.people.manager || '—'}</dd>
+        <dt>Risk owner</dt><dd>{t.people.risk_owner}</dd>
+        <dt>Reviewer</dt><dd>{t.people.reviewer}</dd>
+        {otherSigns.map((s) => <Fragment key={s.key}><dt>{s.label}</dt><dd>{s.signer || 'nobody holds this role'}{status(s)}</dd></Fragment>)}
+      </dl>
 
       {disputed && <div className="note fail signoff-dispute" style={{ margin: '8px 0' }}>
         <b>Sign-offs disagree{d.rounds > 1 ? ` (round ${d.rounds})` : ''}</b>
@@ -36,20 +49,6 @@ export function SignoffCard({ t }: { t: any }) {
             : 'If it is still unresolved after 48 hours it goes to the risk owner, senior management and the board report.'}</p>
         <p className="muted">To resolve: submit new evidence, have it reviewed, and both functions sign off again.</p></div>}
       {d && d.resolved_at && <p className="faint" style={{ margin: '6px 0' }}>An earlier disagreement was resolved {fmt(d.resolved_at)}: {d.resolved_how}.</p>}
-      {!ev && open && <p className="faint" style={{ margin: '6px 0' }}>{disputed ? 'Sign-offs reopen when new evidence is submitted.' : 'Sign-offs open once evidence has been submitted.'}</p>}
-
-      {signs.map((s) => (
-        <div key={s.key} className="signoff-row">
-          <div>
-            <div className="signoff-head"><b>{s.label}</b>{s.signed_by ? <Badge kind="info">✓ Signed</Badge> : <span className="faint">{s.signer || 'nobody holds this role'}</span>}</div>
-            <div className="muted">{s.confirms}</div>
-            {s.signed_by && <div className="faint">{s.signed_by} · {fmt(s.signed_at)}
-              {s.record_source && <> · record shows {s.record_version || 'not present'} ({s.record_source})</>}</div>}</div>
-          {!s.signed_by && open && ev && s.signer && <div className="signoff-actions">
-            <button className="btn sm" disabled={busy} onClick={() => s.key === 'system_owner' ? setDlg({ kind: 'record', s }) : sign(s)}>
-              {s.key === 'system_owner' ? `Confirm record as ${first(s.signer)}` : `Sign as ${first(s.signer)}`}</button>
-            <button className="btn sm danger" disabled={busy} onClick={() => setDlg({ kind: 'dispute', s })}>Disagree</button></div>}
-        </div>))}
       {error && <p className="err">{error}</p>}
       {dlg?.kind === 'record' && <RecordModal t={t} s={dlg.s} onClose={() => setDlg(null)} />}
       {dlg?.kind === 'dispute' && <DisputeModal t={t} s={dlg.s} onClose={() => setDlg(null)} />}

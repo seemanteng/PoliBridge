@@ -304,3 +304,15 @@ label { display: block; font-size: 12.5px; font-weight: 650; color: #344862; mar
 @media (max-width: 680px) { .g3, .g2, .oversight-cards-two, .oversight-activity-grid, .oversight-board-columns, .system-overview { grid-template-columns: 1fr; } .oversight-board-signal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .head { flex-direction: column; align-items: stretch; } .head > div:last-child { flex-wrap: wrap; } .card { padding: 17px; } .oversight-event-row, .oversight-change-row { grid-template-columns: 1fr; gap: 2px; } .oversight-selftest { flex-direction: column; align-items: stretch; gap: 12px; } .system-card { padding: 0; } .system-card > div { padding-left: 17px; padding-right: 17px; } .system-summary { padding: 17px; } .grid { gap: 12px; } .flow { grid-template-columns: 1fr; } .flow > span { transform: rotate(90deg); } .tl li { grid-template-columns: 1fr; gap: 3px; } }
 @media (max-width: 520px) { .oversight-cards { grid-template-columns: 1fr; } .g6 { grid-template-columns: 1fr 1fr; } main { padding: 20px 15px 50px; } .badge { white-space: normal; } .modal { padding: 20px; } .registry-topbar { align-items: stretch; } .registry-topbar > .btn { width: 100%; } .filter-bar select { max-width: none; flex: 1 1 150px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
+
+/* Task page action card: one tidy column of full-width buttons, primary steps first */
+.task-actions { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.task-actions-main, .task-actions-more { display: flex; flex-direction: column; gap: 10px; }
+.task-actions-more { padding-top: 12px; border-top: 1px solid var(--line); }
+.task-actions .btn { width: 100%; min-height: 42px; white-space: normal; }
+
+/* Summary cards on the task page: label, value and detail stack from the top so all three line up; any action sits at the bottom */
+.stat-card { display: flex; flex-direction: column; align-items: flex-start; }
+.stat-card .stat { margin: 8px 0 6px; }
+.stat-card .btn { margin-top: auto; }
+.stat-card .mono { margin-bottom: 12px; }

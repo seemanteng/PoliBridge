@@ -17,7 +17,7 @@ cd frontend && npm install && npm run dev      # http://localhost:5180
 
 On first start the database is seeded with the organisation as of today (staff, departments, systems, the
 approved-source registry) and nothing pre-played: the clock is real time. Three mock advisory feeds (CISA/NVD, Apache,
-Atlassian) then deliver a queue of five advisories, starting three minutes after a reset; **Documents → Security feeds →
+Atlassian) then deliver a queue of four advisories, starting three minutes after a reset; **Documents → Security feeds →
 Send next demo alert** delivers the next one at once. CVE-2017-5638 arrives from Apache first and from NVD second
 and is merged into one obligation. You can still ingest an advisory by hand on **Acknowledgements** (**Fetch from NVD**
 pulls a CVE live). `npm run reset` returns the data to that starting point; a database seeded before this version

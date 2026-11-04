@@ -3,8 +3,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt, refreshAll, useApi } from '../api'
 import { Badge, ImpactBadge, Loading, Modal, pretty, TaskStatusPills, useAction } from '../ui'
 import { EvidenceList } from './Evidence'
-import { SignoffCard } from './Signoffs'
-import { ResponseRules, VendorInstruction } from './TaskRules'
+import { PeopleCard } from './Signoffs'
+import { OverrideModal } from './TaskRules'
 import { GuidanceText } from './documents/Guidance'
 
 function FixSteps({ t }: { t: any }) {
@@ -12,33 +12,7 @@ function FixSteps({ t }: { t: any }) {
   const g = t.guidance[0]
   if (!adv || t.renewal) return g ? <div className="card" style={{ marginTop: 14 }}><h2>Guidance for this system</h2>
     {g.status === 'released' ? <GuidanceText g={g} /> : <p className="muted" style={{ marginTop: 6 }}>Held back for Compliance: {g.reason}</p>}</div> : null
-  const paths = (t.scope_paths || []).join(', ') || 'every application folder'
-  const affected = adv.affected_versions.join(' or ')
-  const fix = adv.fixed_version
-  const rem = t.kind === 'investigation'
-  const step = (_n: number, title: string, body: any) => (
-    <li style={{ margin: '10px 0' }}><b>{title}</b><div className="muted" style={{ marginTop: 2 }}>{body}</div></li>)
-  return (
-    <div className="card" style={{ marginTop: 14 }}>
-      <h2>What to do</h2>
-      <p className="muted" style={{ margin: '6px 0' }}>{adv.cve} affects <b>{adv.product}</b> {affected}. {fix ? <>Fixed in <b>{fix}</b>.</> : 'No fixed version is published yet.'}
-        {adv.kev && ' It is being exploited in the wild.'}</p>
-      <ol style={{ margin: '4px 0 0', paddingLeft: 20 }}>
-        {step(1, `Find out whether ${t.asset} runs ${adv.product}`,
-          <>Look in <code>{paths}</code>. For example: <code>find {(t.scope_paths?.[0] || '/').replace('/**', '')} -iname "{adv.product}*"</code>.
-            {rem && ' Today there is no current component record for this system, which is why it is marked Cannot Determine.'}</>)}
-        {step(2, 'Compare what you find with the fixed version', <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-          <li><b>Not installed, or already {fix ? `at ${fix}` : 'fixed'}:</b> nothing to patch. Go to step 3 and submit evidence that shows it.</li>
-          <li><b>In the affected range:</b> {fix ? <>upgrade to {fix}</> : 'apply the vendor mitigation'}, redeploy, then click <b>Mark fixed</b> on this page.</li>
-          <li><b>Cannot be patched in time:</b> request a time-limited risk acceptance and record an interim control{t.interim.due_h ? ` within ${t.interim.due_h} hours` : ''}.</li></ul>)}
-        {step(3, 'Submit evidence on this page', <>Use an authenticated scan or a direct version check. It must cover <code>{paths}</code> and be dated within the validity window{t.kind === 'remediation' ? ', after you marked it fixed' : ''}.</>)}
-        {step(4, 'It is then reviewed and signed off', <>An independent reviewer ({t.people.reviewer || 'unassigned'}) approves the evidence. The system owner (IT) and Information Security then each sign off.</>)}
-      </ol>
-      <p className="faint" style={{ marginTop: 10 }}>Deadlines: acknowledge {t.ack.note} · {t.interim.due_h ? `interim control ${t.interim.note} · ` : ''}fix by {t.disposition.due}.</p>
-      {g && g.status === 'released' && <details style={{ marginTop: 8 }}><summary className="faint" style={{ cursor: 'pointer' }}>Where this guidance comes from</summary><GuidanceText g={g} /></details>}
-      {g && g.status !== 'released' && <p className="muted" style={{ marginTop: 6 }}>Written guidance held back for Compliance: {g.reason}</p>}
-    </div>
-  )
+  return null
 }
 
 export function TaskList() {
@@ -87,7 +61,7 @@ function Updates() {
   )
 }
 
-type Dlg = null | 'evidence' | 'risk' | 'reject' | 'interim' | 'resume'
+type Dlg = null | 'evidence' | 'risk' | 'reject' | 'interim' | 'resume' | 'deadline'
 
 export function TaskDetail() {
   const { id } = useParams()
@@ -103,22 +77,26 @@ export function TaskDetail() {
     <>
       <div className="crumbs"><Link to={`/acknowledgements/${t.obligation_id}`}>ADV-{String(t.obligation_id).padStart(4, '0')}</Link> / {t.ref}</div>
       <div className="badges" style={{ marginTop: 8 }}><ImpactBadge impact={t.impact} emergency={t.emergency} />
-        {t.kind === 'investigation' && <Badge kind="lbl-cd">? Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
+        {t.kind === 'investigation' && <Badge kind="lbl-cd">Investigation · {t.asset.split(' ·')[0]} is Cannot Determine</Badge>}
         <TaskStatusPills status={t.status} overdue={t.overdue} /></div>
       <h1>{t.title}</h1>
       <p className="muted" style={{ maxWidth: 780 }}>{t.summary}</p>
 
-      <div className="grid g3">
-        <div className="card"><div className="faint">Acknowledgement · {t.ack.due_h ? `${t.ack.due_h}h` : 'working days'}</div>
-          <div className="stat blue">{t.ack.acknowledged ? 'Acknowledged' : 'Awaiting acknowledgement'}</div>
+      <div className="grid g21" style={{ alignItems: 'stretch' }}>
+      <div className="grid g3" style={{ marginTop: 0 }}>
+        <div className="card stat-card"><div className="faint">Acknowledgement · {t.ack.due_h ? `${t.ack.due_h}h` : 'working days'}</div>
+          <div className="stat blue">{t.ack.acknowledged ? 'Acknowledged' : 'Pending'}</div>
           <div className="faint mono">{t.ack.acknowledged ? `${fmt(t.ack.at)} · ${t.ack.note}` : t.ack.note}</div></div>
-        <div className={`card ${t.interim.state === 'reopened' ? 'dash' : ''}`}><div className="faint">Interim control · {t.interim.due_h ? `${t.interim.due_h}h` : 'not required'}</div>
+        <div className={`card stat-card ${t.interim.state === 'reopened' ? 'dash' : ''}`}><div className="faint">Interim control · {t.interim.due_h ? `${t.interim.due_h}h` : 'not required'}</div>
           <div className={`stat ${t.interim.state === 'reopened' ? 'purple' : t.interim.state === 'pending' ? 'red' : ''}`}>
             {{ reopened: 'Reopened', recorded: 'In place', pending: 'Required', not_required: 'Not required' }[t.interim.state as string]}</div>
-          <div className="faint mono">{t.interim.note}</div></div>
-        <div className={`card ${t.disposition.overdue ? 'alert' : ''}`}><div className="faint">Disposition · {t.disposition.days >= 3 ? `${t.disposition.days} days` : `${t.disposition.days * 24}h`}</div>
+          {t.interim.state !== 'not_required' && <div className="faint mono">{t.interim.note}</div>}</div>
+        <div className={`card stat-card ${t.disposition.overdue ? 'alert' : ''}`}><div className="faint">Fix Deadline · {t.disposition.days >= 3 ? `${t.disposition.days} days` : `${t.disposition.days * 24}h`}</div>
           <div className={`stat ${t.disposition.overdue ? 'red' : ''}`}>{t.disposition.remaining}</div>
-          <div className="faint mono">due {t.disposition.due} · not reset</div></div>
+          <div className="faint mono">due {t.disposition.due}</div>
+          {t.response_rules?.can_override && <button className="btn sm" onClick={() => setDlg('deadline')}>Shorten Fix Deadline</button>}</div>
+      </div>
+      <PeopleCard t={t} />
       </div>
 
       <div className="grid g21">
@@ -133,44 +111,30 @@ export function TaskDetail() {
               {r.status === 'pending' && <><p className="faint">An authorised Risk Owner, senior manager or CISO must approve. The requester and system owner cannot approve.</p>
                 <button className="btn sm primary" onClick={() => act(`/risk-acceptances/${r.id}/approve`)}>Approve temporary exception</button></>}</div>))}</>}
           </div>
-        <ResponseRules t={t} /></div>
+        </div>
         <div>
-          <div className="card"><h2>People</h2>
-            <dl className="kv" style={{ marginTop: 10 }}>
-              <dt>Owner</dt><dd><b>{t.people.owner?.name}</b><div className="faint">{t.people.owner?.title}</div></dd>
-              <dt>Manager</dt><dd>{t.people.manager || '—'}</dd><dt>Risk owner</dt><dd>{t.people.risk_owner}</dd>
-              <dt>Reviewer</dt><dd>{t.people.reviewer}<div className="faint">must differ from submitter</div></dd></dl></div>
-          {t.signoffs.length > 0 && <SignoffCard t={t} />}
-          <FixSteps t={t} />
-          <div className="card" style={{ marginTop: 14 }}><h2>To close this task</h2>
-            <p className="muted" style={{ margin: '8px 0' }}>{t.close_requirement}</p>
-            {open && <VendorInstruction t={t} />}
-            {t.renewal && <div className="note" style={{ marginBottom: 10 }}>
-              <b>Renewal steps</b><ol style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-                <li>Renew or recheck the control for {t.component} on {t.asset}.</li>
-                <li>{t.renewal.marked_fixed ? 'Already marked fixed. You can continue with evidence.' : <>Click <b>Mark fixed</b> when that work is done.</>}</li>
-                <li>Submit evidence using <b>{t.renewal.method.replaceAll('_', ' ')}</b> and the exact scope shown below. The evidence time must be after you marked it fixed.</li>
-                <li>Have an independent reviewer approve the evidence in <Link to="/remediations?tab=evidence">Evidence review</Link>.</li>
-              </ol><div className="faint" style={{ marginTop: 6 }}>Required scope: <code>{t.renewal.scope.join(', ')}</code></div>
-              {t.evidence.some((e: any) => e.status === 'rejected' && e.reasons.some((r: string) => r.includes('missing scope'))) &&
-                <p className="muted" style={{ margin: '8px 0 0' }}>Your earlier submission had an empty scope. The evidence form now fills in the required scope for you.</p>}
-            </div>}
-            {open && <>
-              {!t.ack.acknowledged && <button className="btn block" onClick={() => act(`/tasks/${t.id}/acknowledge`)}>Acknowledge</button>}
-              {t.kind === 'remediation' && t.status !== 'fixed_pending_review' && <button className="btn block" onClick={() => act(`/tasks/${t.id}/fixed`)}>Mark fixed</button>}
-              <button className="btn primary block" onClick={() => setDlg('evidence')}>Submit evidence</button>
-              <button className="btn block" onClick={() => setDlg('risk')}>Request temporary risk exception</button>
-              {t.impact === 'High' && !t.interim.note?.startsWith('Web') && t.interim.state !== 'recorded' &&
-                <button className="btn block" onClick={() => setDlg('interim')}>Record interim control</button>}
-              <button className="btn danger block" onClick={() => setDlg('reject')}>Reject — not my system</button>
-              <p className="faint" style={{ marginTop: 8 }}>Rejecting reroutes the task immediately and raises an ownership finding. The deadline keeps running.</p></>}
+          <div className="card"><h2>To close this task</h2>
+            {open && <div className="task-actions">
+              <div className="task-actions-main">
+                {!t.ack.acknowledged && <button className="btn" onClick={() => act(`/tasks/${t.id}/acknowledge`)}>Acknowledge</button>}
+                {t.kind === 'remediation' && t.status !== 'fixed_pending_review' && <button className="btn" onClick={() => act(`/tasks/${t.id}/fixed`)}>Mark fixed</button>}
+                <button className="btn primary" onClick={() => setDlg('evidence')}>Submit evidence</button>
+              </div>
+              <div className="task-actions-more">
+                <button className="btn" onClick={() => setDlg('risk')}>Request temporary risk exception</button>
+                {t.impact === 'High' && !t.interim.note?.startsWith('Web') && t.interim.state !== 'recorded' &&
+                  <button className="btn" onClick={() => setDlg('interim')}>Record interim control</button>}
+                <button className="btn danger" onClick={() => setDlg('reject')}>Reject — not my system</button>
+              </div></div>}
             {t.status === 'risk_accepted' && myRisks.some((r: any) => r.status === 'approved') && <div className="note" style={{ marginTop: 10 }}>
               <b>Ready to fix it now?</b><p className="muted">End the temporary exception to reopen this task and resume remediation before it expires.</p>
               <button className="btn sm primary" onClick={() => setDlg('resume')}>End exception &amp; resume remediation</button></div>}
             {aerr && <p className="err">{aerr}</p>}</div>
+          <FixSteps t={t} />
         </div>
       </div>
       {dlg === 'evidence' && <EvidenceModal t={t} onClose={() => setDlg(null)} />}
+      {dlg === 'deadline' && <OverrideModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'risk' && <RiskModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'resume' && <ResumeRiskModal t={t} onClose={() => setDlg(null)} />}
       {dlg === 'reject' && <ReasonModal t={t} kind="reject" onClose={() => setDlg(null)} />}
@@ -225,12 +189,14 @@ function EvidenceModal({ t, onClose }: { t: any; onClose: () => void }) {
   const [f, setF] = useState({ purpose: t.kind === 'investigation' ? 'absence' : 'remediation', asset_name: t.asset, component: t.component || '',
     scope: t.renewal?.scope?.join(', ') || '', method: t.renewal?.method || 'authenticated_scan', observed_version: '', timestamp: '' })
   const { run, error, busy } = useAction()
-  const go = async () => { if (await run(async () => {
+  const [rejected, setRejected] = useState<string[] | null>(null)
+  const go = async () => { let reasons: string[] | null = null
+    if (await run(async () => {
     const r = await api.post(`/tasks/${t.id}/evidence`, { ...f, scope: f.scope.split(',').map((s: string) => s.trim()).filter(Boolean),
       observed_version: f.observed_version || null, timestamp: f.timestamp || clock.data?.now })
-    refreshAll(); if (r.status === 'rejected') alert('Evidence rejected: ' + r.reasons.join('; ')) })) onClose() }
+    refreshAll(); if (r.status === 'rejected') reasons = r.reasons })) { if (reasons) setRejected(reasons); else onClose() } }
   const set = (k: string, v: string) => setF({ ...f, [k]: v })
-  return <Modal title="Submit evidence" sub={t.renewal ? 'Verify the renewed monitoring control after marking it fixed. Scope and method are filled from the expired claim.' : 'Structured evidence is checked against the claim: asset, component scope, method, timestamp.'} onClose={onClose}>
+  return <><Modal title="Submit evidence" sub={t.renewal ? 'Verify the renewed monitoring control after marking it fixed. Scope and method are filled from the expired claim.' : 'Structured evidence is checked against the claim: asset, component scope, method, timestamp.'} onClose={onClose}>
     <label>Purpose</label><select value={f.purpose} onChange={(e) => set('purpose', e.target.value)}>
       <option value="remediation">{t.renewal ? 'Monitoring control renewed' : 'Remediation (it is patched)'}</option>{!t.renewal && <option value="absence">Absence (component not present)</option>}</select>
     <label>Asset the evidence is for</label><input value={f.asset_name} onChange={(e) => set('asset_name', e.target.value)} />
@@ -245,4 +211,7 @@ function EvidenceModal({ t, onClose }: { t: any; onClose: () => void }) {
     <label>Evidence generated at (blank = now)</label><input value={f.timestamp} onChange={(e) => set('timestamp', e.target.value)} placeholder="2017-03-15T10:48:00" />
     {error && <p className="err">{error}</p>}
     <div className="actions"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>Submit for review</button></div></Modal>
+    {rejected && <Modal title="Evidence rejected" onClose={onClose}>
+      <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>{rejected.map((r, i) => <li key={i}>{r}</li>)}</ul>
+      <div className="actions"><button className="btn primary" onClick={onClose}>OK</button></div></Modal>}</>
 }

@@ -41,13 +41,6 @@ MOCK_FEED = [
     ("CISA/NVD", 3, 30, dict(
         cve="CVE-2017-5638", product="struts2-core", affected_versions=[">=2.3.5 <2.3.32", ">=2.5.0 <2.5.10.1"],
         cvss=10.0, kev=True, fixed_version="2.3.32, 2.5.10.1", description=STRUTS_NVD)),
-    ("Atlassian security advisories", 7, 45, dict(
-        cve="CVE-2019-3396", product="confluence",
-        affected_versions=["<6.6.12", ">=6.7.0 <6.12.3", ">=6.13.0 <6.13.3", ">=6.14.0 <6.14.2"], cvss=9.8, kev=True,
-        fixed_version="6.6.12, 6.12.3, 6.13.3, 6.14.2",
-        description="The Widget Connector macro in Confluence Server before 6.6.12, 6.7.0 before 6.12.3, 6.13.0 before "
-                    "6.13.3 and 6.14.0 before 6.14.2 allows remote attackers to achieve path traversal and remote "
-                    "code execution via server-side template injection.")),
     ("CISA/NVD", 9, 90, dict(
         cve="CVE-2016-2098", product="rails", affected_versions=["<3.2.22.2", ">=4.0.0 <4.1.14.2", ">=4.2.0 <4.2.5.2"],
         cvss=7.3, kev=False, fixed_version="3.2.22.2, 4.1.14.2, 4.2.5.2",
