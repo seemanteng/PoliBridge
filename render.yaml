@@ -1,0 +1,14 @@
+# Backend on Render. It needs a process that stays running: the SQLite demo database and the
+# 60-second sweep (feeds, escalations, expiry) live in it. The frontend is on Vercel (frontend/vercel.json).
+# The disk is not persistent, so each restart reseeds the baseline demo, which is what the demo wants.
+services:
+  - type: web
+    name: polibridge-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_API_KEY   # optional; leave unset to use the built-in guidance stub
+        sync: false
