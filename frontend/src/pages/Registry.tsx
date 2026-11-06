@@ -15,10 +15,10 @@ const ROLE: Record<string, string> = {
 // What each role is responsible for in PoliBridge, shown for people who own no systems.
 const DUTY: Record<string, string> = {
   executive: 'Accountable to the board for the programme', senior_mgmt: 'Receives missed-deadline escalations',
-  ciso: 'Escalation point at 48h; owns findings on unregistered assets', risk_owner: 'Approves time-limited risk acceptances',
+  ciso: 'Second escalation point (8h for High); owns findings on unregistered assets', risk_owner: 'Approves time-limited risk acceptances',
   cco: 'Oversees obligation approval', compliance: 'Approves candidate obligations', legal: 'Decides regulatory applicability',
   internal_audit: 'Independent assurance over the programme', reviewer: 'Independent evidence review',
-  manager: 'Escalation point at 24h for owners', bu_head: 'Reroute target when an owner is invalid',
+  manager: 'First escalation point (4h for High)', bu_head: 'Reroute target when an owner is invalid',
   owner: 'Submits evidence and remediation work',
 }
 
