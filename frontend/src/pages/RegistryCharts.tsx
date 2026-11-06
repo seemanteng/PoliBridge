@@ -88,7 +88,7 @@ type L = { from: string; to: string; bad?: boolean }
 export function OwnershipMap({ assets, restricted = false }: { assets: any[]; restricted?: boolean }) {
   const [hover, setHover] = useState<string | null>(null)
   const COLW = [290, 196, 176, 196], NH = 50, GAP = 56, ROW = 62
-  const heads = ['System', 'Owner', 'Manager · escalation at 24h', 'Business-unit head']
+  const heads = ['System', 'Owner', 'Manager · first escalation', 'Business-unit head']
 
   const { nodes, links, H } = useMemo(() => {
     const nodes = new Map<string, N>(), links: L[] = [], seen = new Set<string>()
